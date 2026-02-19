@@ -9,7 +9,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from engines._colors import green, yellow, red
+from engines._colors import green, yellow, red, Spinner
 
 try:
     import truststore
@@ -248,33 +248,39 @@ class ClaudeVisionEngine:
             print(red(f"Error: Unsupported file format '{ext}'"), file=sys.stderr)
             return
 
-        print(yellow(f"  Sending to Claude ({model})..."))
         try:
-            with client.messages.stream(
-                model=model,
-                max_tokens=self.max_tokens,
-                system=SYSTEM_PROMPT,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "image",
-                                "source": {
-                                    "type": "base64",
-                                    "media_type": media_type,
-                                    "data": image_data,
+            with Spinner(f"Sending to Claude ({model})") as spinner, \
+                 client.messages.stream(
+                    model=model,
+                    max_tokens=self.max_tokens,
+                    system=SYSTEM_PROMPT,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "image",
+                                    "source": {
+                                        "type": "base64",
+                                        "media_type": media_type,
+                                        "data": image_data,
+                                    },
                                 },
-                            },
-                            {
-                                "type": "text",
-                                "text": USER_PROMPT,
-                            },
-                        ],
-                    }
-                ],
-            ) as stream:
+                                {
+                                    "type": "text",
+                                    "text": USER_PROMPT,
+                                },
+                            ],
+                        }
+                    ],
+                 ) as stream:
+                token_count = 0
+                for text in stream.text_stream:
+                    token_count += 1
+                    if token_count % 20 == 0:
+                        spinner.update(f"~{token_count} tokens")
                 message = stream.get_final_message()
+                elapsed = spinner.elapsed
         except Exception as exc:
             import anthropic
 
@@ -324,9 +330,10 @@ class ClaudeVisionEngine:
 
         usage = message.usage
         stop = message.stop_reason
+        status = "complete" if stop == "end_turn" else "truncated"
         print(yellow(
-            f"  Tokens: {usage.input_tokens} in / {usage.output_tokens} out"
-            f"  (stop: {stop})"
+            f"  {status.capitalize()} in {elapsed:.1f}s"
+            f"  ({usage.input_tokens} in / {usage.output_tokens} out)"
         ))
         if stop == "max_tokens":
             print(yellow(
