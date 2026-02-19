@@ -21,11 +21,11 @@ IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tiff", ".tif"}
 
 class TesseractEngine:
     name = "tesseract"
-    output_suffix = ".txt"
 
     def __init__(self, dpi=300, lang="nor"):
         self.dpi = dpi
         self.lang = lang
+        self.output_suffix = f".tesseract-{dpi}dpi.txt"
 
     def check_dependencies(self):
         """Return list of missing dependencies."""

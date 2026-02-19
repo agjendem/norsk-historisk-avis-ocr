@@ -20,7 +20,7 @@ Local OCR using [Tesseract](https://github.com/tesseract-ocr/tesseract). Free, f
 - Requires `tesseract` and `poppler` installed on the system
 - Default language: Norwegian (`nor`)
 - Supports: PDF, PNG, JPG, JPEG, TIFF
-- Output: `{filename}.txt`
+- Output: `{filename}.tesseract-{dpi}dpi.txt`
 
 ### claude-vision
 
@@ -100,7 +100,7 @@ The `--max-tokens` flag controls the output ceiling. It only affects cost if the
 
 Output filenames encode the engine settings for easy comparison:
 
-- Tesseract: `Filename.txt`
+- Tesseract: `Filename.tesseract-300dpi.txt`
 - Claude Vision: `Filename.vision-300dpi-opus.txt`
 
 Re-running with different settings (e.g., `--dpi 150` or `--model claude-sonnet-4-20250514`) produces separate output files so you can compare results side by side.
