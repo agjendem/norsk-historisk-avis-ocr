@@ -1,6 +1,7 @@
 """Claude Vision OCR engine — cross-platform wrapper using anthropic SDK and pdf2image."""
 
 import base64
+import getpass
 import io
 import os
 import platform
@@ -68,7 +69,7 @@ def ensure_api_key():
         return
 
     print("No ANTHROPIC_API_KEY found in environment or .env file.")
-    key = input("Enter your Anthropic API key: ").strip()
+    key = getpass.getpass("Enter your Anthropic API key: ").strip()
     if not key:
         print("Error: API key is required for claude-vision.", file=sys.stderr)
         sys.exit(1)
