@@ -78,11 +78,17 @@ def main():
         choices=ENGINE_NAMES,
         help="OCR engine to use (interactive menu if omitted)",
     )
-    parser.add_argument("--dpi", type=int, default=150, help="DPI for PDF conversion (default: 150)")
+    parser.add_argument("--dpi", type=int, default=300, help="DPI for PDF conversion (default: 300)")
     parser.add_argument(
         "--model",
         default="claude-sonnet-4-20250514",
         help="Claude model (claude-vision only)",
+    )
+    parser.add_argument(
+        "--max-tokens",
+        type=int,
+        default=16384,
+        help="Max output tokens (claude-vision only, default: 16384)",
     )
     parser.add_argument(
         "--region",
@@ -102,6 +108,7 @@ def main():
     kwargs = {"dpi": args.dpi}
     if engine_name == "claude-vision":
         kwargs["model"] = args.model
+        kwargs["max_tokens"] = args.max_tokens
         kwargs["region"] = args.region
     engine = engine_cls(**kwargs)
 

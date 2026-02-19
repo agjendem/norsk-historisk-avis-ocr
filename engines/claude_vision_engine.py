@@ -26,22 +26,29 @@ Norwegian newspaper scans. Your task is to produce an accurate, clean \
 transcription of the text in the provided image.
 
 Rules:
-- Read columns left to right, top to bottom within each column.
-- Join hyphenated words that are split across line breaks.
+- Identify each column visually before reading. Process one column at a \
+time, left to right. Read each column top to bottom before moving to the next.
+- Do NOT mix text from adjacent columns. If a line seems to jump topics \
+mid-sentence, you are likely reading across a column boundary.
+- Join hyphenated words that are split across line breaks within a column.
 - Output flowing paragraph text, not line-by-line reproduction.
 - Preserve paragraph breaks where they appear in the original.
 - Reproduce poems/verses with their original line breaks.
 - Use \u00ab\u00bb for quotes as in the original.
 - Mark section headings on their own lines.
 - If a word is truly illegible, write [?] after your best guess.
-- Do NOT add commentary, headers, or metadata \u2014 output only the transcribed text.\
+- Do NOT add commentary, headers, or metadata \u2014 output only the transcribed text.
+- NEVER summarize, skip, or abbreviate content. Transcribe every word on the \
+page. If you run out of space, stop mid-sentence rather than adding a summary \
+like \u00abcontent continues...\u00bb or similar.\
 """
 
 USER_PROMPT = """\
-Transcribe the full text of this newspaper page. \
-Read the columns in order (left to right). \
+Transcribe the COMPLETE text of this newspaper page. \
+First identify the column layout, then read each column fully (left to right). \
 Join hyphenated line-break words into whole words. \
-Output clean flowing text with paragraph breaks preserved.\
+Output clean flowing text with paragraph breaks preserved. \
+Do not skip or summarize any content.\
 """
 
 MEDIA_TYPES = {
@@ -106,13 +113,22 @@ def _prompt_api_key():
 MAX_IMAGE_BYTES = 5 * 1024 * 1024  # 5 MB API limit
 
 
+def _prepare_image(image):
+    """Enhance image for OCR: sharpen and boost contrast."""
+    from PIL import ImageEnhance, ImageFilter
+
+    image = image.filter(ImageFilter.SHARPEN)
+    image = ImageEnhance.Contrast(image).enhance(1.3)
+    return image
+
+
 def _encode_image_under_limit(image, max_bytes=MAX_IMAGE_BYTES):
-    """Encode a PIL Image as grayscale JPEG, scaling down if needed to stay under max_bytes.
+    """Encode a PIL Image as JPEG, scaling down if needed to stay under max_bytes.
 
     Returns (base64_str, media_type).
     """
-    image = image.convert("L")  # grayscale — ideal for B&W scans, ~1/3 size
-    quality = 85
+    image = _prepare_image(image)
+    quality = 95
     while True:
         buf = io.BytesIO()
         image.save(buf, format="JPEG", quality=quality)
@@ -120,13 +136,13 @@ def _encode_image_under_limit(image, max_bytes=MAX_IMAGE_BYTES):
         if len(data) <= max_bytes:
             return base64.standard_b64encode(data).decode("utf-8"), "image/jpeg"
         # Try lower quality first
-        if quality > 40:
-            quality -= 15
+        if quality > 50:
+            quality -= 10
             continue
         # Quality alone isn't enough — scale down
         w, h = image.size
-        image = image.resize((int(w * 0.75), int(h * 0.75)))
-        quality = 90  # reset quality after resize
+        image = image.resize((int(w * 0.8), int(h * 0.8)))
+        quality = 95  # reset quality after resize
 
 
 BEDROCK_MODEL_MAP = {
@@ -136,12 +152,14 @@ BEDROCK_MODEL_MAP = {
 
 class ClaudeVisionEngine:
     name = "claude-vision"
-    output_suffix = ".vision.txt"
 
-    def __init__(self, dpi=150, model="claude-sonnet-4-20250514", region="eu-north-1"):
+    def __init__(self, dpi=300, model="claude-sonnet-4-20250514", region="eu-north-1", max_tokens=16384):
         self.dpi = dpi
         self.model = model
         self.region = region
+        self.max_tokens = max_tokens
+        self._model_short = model.split("-")[1] if "-" in model else model
+        self.output_suffix = f".vision-{dpi}dpi-{self._model_short}.txt"
 
     def _get_client(self):
         """Create an Anthropic client using the best available auth method.
@@ -233,7 +251,7 @@ class ClaudeVisionEngine:
         try:
             message = client.messages.create(
                 model=model,
-                max_tokens=8192,
+                max_tokens=self.max_tokens,
                 system=SYSTEM_PROMPT,
                 messages=[
                     {
