@@ -4,18 +4,8 @@ import platform
 import shutil
 from pathlib import Path
 
-import pytesseract
-from pdf2image import convert_from_path
-from PIL import Image
-
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 OUTPUT_DIR = PROJECT_DIR / "output"
-
-# Auto-detect tesseract on Windows
-if platform.system() == "Windows":
-    _win_tesseract = Path(r"C:\Program Files\Tesseract-OCR\tesseract.exe")
-    if _win_tesseract.exists():
-        pytesseract.pytesseract.tesseract_cmd = str(_win_tesseract)
 
 # Auto-detect poppler on Windows
 _poppler_path = None
@@ -50,6 +40,16 @@ class TesseractEngine:
 
     def process_file(self, file_path):
         """Process a single file and write OCR output to output/."""
+        import pytesseract
+        from pdf2image import convert_from_path
+        from PIL import Image
+
+        # Auto-detect tesseract on Windows
+        if platform.system() == "Windows":
+            _win_tesseract = Path(r"C:\Program Files\Tesseract-OCR\tesseract.exe")
+            if _win_tesseract.exists():
+                pytesseract.pytesseract.tesseract_cmd = str(_win_tesseract)
+
         file_path = Path(file_path)
         ext = file_path.suffix.lower()
         stem = file_path.stem

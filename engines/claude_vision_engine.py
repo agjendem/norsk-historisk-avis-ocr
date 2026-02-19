@@ -8,9 +8,6 @@ import shutil
 import sys
 from pathlib import Path
 
-from dotenv import load_dotenv
-from pdf2image import convert_from_path
-
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 OUTPUT_DIR = PROJECT_DIR / "output"
 
@@ -54,16 +51,21 @@ if platform.system() == "Windows":
         _poppler_path = str(_win_poppler)
 
 
+def _load_dotenv():
+    from dotenv import load_dotenv
+    env_file = PROJECT_DIR / ".env"
+    if env_file.exists():
+        load_dotenv(env_file)
+
+
 def ensure_api_key():
     """Check env, load .env, or prompt interactively for the Anthropic API key."""
     if os.environ.get("ANTHROPIC_API_KEY"):
         return
 
-    env_file = PROJECT_DIR / ".env"
-    if env_file.exists():
-        load_dotenv(env_file)
-        if os.environ.get("ANTHROPIC_API_KEY"):
-            return
+    _load_dotenv()
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        return
 
     print("No ANTHROPIC_API_KEY found in environment or .env file.")
     key = input("Enter your Anthropic API key: ").strip()
@@ -71,6 +73,7 @@ def ensure_api_key():
         print("Error: API key is required for claude-vision.", file=sys.stderr)
         sys.exit(1)
 
+    env_file = PROJECT_DIR / ".env"
     env_file.write_text(f"ANTHROPIC_API_KEY={key}\n", encoding="utf-8")
     os.environ["ANTHROPIC_API_KEY"] = key
     print("Saved to .env")
@@ -85,21 +88,16 @@ class ClaudeVisionEngine:
         self.model = model
 
     def check_dependencies(self):
-        """Return list of missing dependencies."""
+        """Return list of missing dependencies (hard blockers only)."""
         missing = []
         if not shutil.which("pdftoppm") and _poppler_path is None:
             missing.append("poppler (provides pdftoppm for PDF conversion)")
-        if not os.environ.get("ANTHROPIC_API_KEY"):
-            env_file = PROJECT_DIR / ".env"
-            if env_file.exists():
-                load_dotenv(env_file)
-            if not os.environ.get("ANTHROPIC_API_KEY"):
-                missing.append("ANTHROPIC_API_KEY (will be prompted at runtime)")
         return missing
 
     def process_file(self, file_path):
         """Process a single file and write OCR output to output/."""
         import anthropic
+        from pdf2image import convert_from_path
 
         ensure_api_key()
 

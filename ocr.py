@@ -15,7 +15,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from engines import ENGINES
+from engines import ENGINE_NAMES, _get_engines
 
 PROJECT_DIR = Path(__file__).resolve().parent
 INPUT_DIR = PROJECT_DIR / "input"
@@ -52,15 +52,14 @@ def list_files(output_suffix):
 
 def select_engine():
     """Interactive engine selection menu."""
-    engine_names = list(ENGINES.keys())
     print("Select an OCR engine:")
-    for i, name in enumerate(engine_names, 1):
+    for i, name in enumerate(ENGINE_NAMES, 1):
         print(f"  {i}) {name}")
-    choice = input(f"Choice [1-{len(engine_names)}]: ").strip()
+    choice = input(f"Choice [1-{len(ENGINE_NAMES)}]: ").strip()
     try:
         idx = int(choice) - 1
-        if 0 <= idx < len(engine_names):
-            return engine_names[idx]
+        if 0 <= idx < len(ENGINE_NAMES):
+            return ENGINE_NAMES[idx]
     except ValueError:
         pass
     print(f"Error: Invalid choice '{choice}'", file=sys.stderr)
@@ -75,7 +74,7 @@ def main():
     parser.add_argument(
         "engine",
         nargs="?",
-        choices=list(ENGINES.keys()),
+        choices=ENGINE_NAMES,
         help="OCR engine to use (interactive menu if omitted)",
     )
     parser.add_argument("--dpi", type=int, default=300, help="DPI for PDF conversion")
@@ -88,7 +87,10 @@ def main():
 
     # Engine selection
     engine_name = args.engine or select_engine()
-    engine_cls = ENGINES[engine_name]
+
+    # Lazy-load engine classes (deferred so --help works without deps installed)
+    engines = _get_engines()
+    engine_cls = engines[engine_name]
 
     # Build engine with applicable kwargs
     kwargs = {"dpi": args.dpi}
