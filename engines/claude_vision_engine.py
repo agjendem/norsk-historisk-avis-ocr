@@ -147,13 +147,14 @@ def _encode_image_under_limit(image, max_bytes=MAX_IMAGE_BYTES):
 
 BEDROCK_MODEL_MAP = {
     "claude-sonnet-4-20250514": "us.anthropic.claude-sonnet-4-20250514-v1:0",
+    "claude-opus-4-20250514": "us.anthropic.claude-opus-4-20250514-v1:0",
 }
 
 
 class ClaudeVisionEngine:
     name = "claude-vision"
 
-    def __init__(self, dpi=300, model="claude-sonnet-4-20250514", region="eu-north-1", max_tokens=16384):
+    def __init__(self, dpi=300, model="claude-opus-4-20250514", region="eu-north-1", max_tokens=16384):
         self.dpi = dpi
         self.model = model
         self.region = region
@@ -249,7 +250,7 @@ class ClaudeVisionEngine:
 
         print(yellow(f"  Sending to Claude ({model})..."))
         try:
-            message = client.messages.create(
+            with client.messages.stream(
                 model=model,
                 max_tokens=self.max_tokens,
                 system=SYSTEM_PROMPT,
@@ -272,7 +273,8 @@ class ClaudeVisionEngine:
                         ],
                     }
                 ],
-            )
+            ) as stream:
+                message = stream.get_final_message()
         except Exception as exc:
             import anthropic
 
@@ -319,6 +321,18 @@ class ClaudeVisionEngine:
             else:
                 raise
             return
+
+        usage = message.usage
+        stop = message.stop_reason
+        print(yellow(
+            f"  Tokens: {usage.input_tokens} in / {usage.output_tokens} out"
+            f"  (stop: {stop})"
+        ))
+        if stop == "max_tokens":
+            print(yellow(
+                f"  Warning: output was truncated at {self.max_tokens} tokens."
+                " Re-run with a higher --max-tokens value to get the full text."
+            ))
 
         text = message.content[0].text
         txt_path.write_text(text + "\n", encoding="utf-8")

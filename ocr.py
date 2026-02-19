@@ -81,8 +81,8 @@ def main():
     parser.add_argument("--dpi", type=int, default=300, help="DPI for PDF conversion (default: 300)")
     parser.add_argument(
         "--model",
-        default="claude-sonnet-4-20250514",
-        help="Claude model (claude-vision only)",
+        default="claude-opus-4-20250514",
+        help="Claude model (claude-vision only, default: claude-opus-4-20250514)",
     )
     parser.add_argument(
         "--max-tokens",
