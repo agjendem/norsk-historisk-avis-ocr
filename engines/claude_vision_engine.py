@@ -226,7 +226,7 @@ class ClaudeVisionEngine:
                     file=sys.stderr,
                 )
                 print(
-                    "  Get a key at: https://console.anthropic.com/settings/keys",
+                    "  Get a key at: https://platform.claude.com/settings/keys",
                     file=sys.stderr,
                 )
                 # Remove bad key from .env so next run re-prompts
@@ -247,9 +247,28 @@ class ClaudeVisionEngine:
                     )
                 else:
                     print(
-                        "  Check your API key permissions at: https://console.anthropic.com/settings/keys",
+                        "  Check your API key permissions at: https://platform.claude.com/settings/keys",
                         file=sys.stderr,
                     )
+            elif isinstance(exc, anthropic.APIConnectionError):
+                print(
+                    "Error: Could not connect to the API.",
+                    file=sys.stderr,
+                )
+                print(
+                    "  Check your internet connection and try again.",
+                    file=sys.stderr,
+                )
+                if isinstance(client, anthropic.AnthropicBedrock):
+                    print(
+                        f"  Also verify that Bedrock is available in region {self.region}.",
+                        file=sys.stderr,
+                    )
+            elif isinstance(exc, anthropic.APIStatusError):
+                print(
+                    f"Error: API returned {exc.status_code} — {exc.message}",
+                    file=sys.stderr,
+                )
             else:
                 raise
             return
