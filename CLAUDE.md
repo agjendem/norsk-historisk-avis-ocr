@@ -19,7 +19,7 @@ PDF/images go through: pdf2image conversion (PDF only) -> sharpen + contrast boo
 
 ## Key constraints
 
-- Claude API has a 5 MB image size limit. The `_encode_image_under_limit()` function handles this automatically.
+- Claude API has a 5 MB image size limit on **decoded** bytes (not the base64 string). Base64 inflates by ~33%, but the API decodes before checking. All size comparisons in the code use raw byte length to match. Two paths: `_encode_image_under_limit()` loops until under the limit (PDFs, oversized images); small image files are passed through as-is after a raw size check.
 - Opus with high `max_tokens` requires the streaming API (`client.messages.stream()`).
 - TIFF files are not supported by the Claude API. Only tesseract handles TIFF.
 - Output filenames include DPI and model short name to allow side-by-side comparison of different settings.

@@ -110,7 +110,10 @@ def _prompt_api_key():
     print("Saved to .env")
 
 
-MAX_IMAGE_BYTES = 5 * 1024 * 1024  # 5 MB API limit
+# Claude API limit is 5 MB on the decoded image bytes (not the base64 string).
+# Base64 inflates size by ~33%, but the API decodes before checking, so we
+# compare against raw byte length throughout.
+MAX_IMAGE_BYTES = 5 * 1024 * 1024
 
 
 def _prepare_image(image):
@@ -237,7 +240,7 @@ class ClaudeVisionEngine:
             from PIL import Image
 
             raw = file_path.read_bytes()
-            if len(raw) <= MAX_IMAGE_BYTES:
+            if len(raw) <= MAX_IMAGE_BYTES:  # raw bytes, not base64 — matches API check
                 media_type = MEDIA_TYPES[ext]
                 image_data = base64.standard_b64encode(raw).decode("utf-8")
             else:
