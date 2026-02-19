@@ -83,6 +83,11 @@ def main():
         default="claude-sonnet-4-20250514",
         help="Claude model (claude-vision only)",
     )
+    parser.add_argument(
+        "--region",
+        default="eu-north-1",
+        help="AWS Bedrock region (claude-vision only, default: eu-north-1)",
+    )
     args = parser.parse_args()
 
     # Engine selection
@@ -96,6 +101,7 @@ def main():
     kwargs = {"dpi": args.dpi}
     if engine_name == "claude-vision":
         kwargs["model"] = args.model
+        kwargs["region"] = args.region
     engine = engine_cls(**kwargs)
 
     # Dependency check

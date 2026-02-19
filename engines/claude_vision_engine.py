@@ -59,16 +59,31 @@ def _load_dotenv():
         load_dotenv(env_file)
 
 
-def ensure_api_key():
-    """Check env, load .env, or prompt interactively for the Anthropic API key."""
+def _has_anthropic_api_key():
+    """Return True if ANTHROPIC_API_KEY is available in env or .env file."""
     if os.environ.get("ANTHROPIC_API_KEY"):
-        return
-
+        return True
     _load_dotenv()
-    if os.environ.get("ANTHROPIC_API_KEY"):
-        return
+    return bool(os.environ.get("ANTHROPIC_API_KEY"))
 
+
+def _has_aws_credentials():
+    """Return True if AWS credentials are available (profile, env vars, or default session)."""
+    if os.environ.get("AWS_PROFILE") or os.environ.get("AWS_ACCESS_KEY_ID"):
+        return True
+    try:
+        import boto3
+        session = boto3.Session()
+        credentials = session.get_credentials()
+        return credentials is not None
+    except Exception:
+        return False
+
+
+def _prompt_api_key():
+    """Prompt for Anthropic API key and save to .env."""
     print("No ANTHROPIC_API_KEY found in environment or .env file.")
+    print("No AWS credentials detected for Bedrock.")
     key = getpass.getpass("Enter your Anthropic API key: ").strip()
     if not key:
         print("Error: API key is required for claude-vision.", file=sys.stderr)
@@ -80,13 +95,49 @@ def ensure_api_key():
     print("Saved to .env")
 
 
+BEDROCK_MODEL_MAP = {
+    "claude-sonnet-4-20250514": "us.anthropic.claude-sonnet-4-20250514-v1:0",
+}
+
+
 class ClaudeVisionEngine:
     name = "claude-vision"
     output_suffix = ".vision.txt"
 
-    def __init__(self, dpi=300, model="claude-sonnet-4-20250514"):
+    def __init__(self, dpi=300, model="claude-sonnet-4-20250514", region="eu-north-1"):
         self.dpi = dpi
         self.model = model
+        self.region = region
+
+    def _get_client(self):
+        """Create an Anthropic client using the best available auth method.
+
+        Priority:
+        1. ANTHROPIC_API_KEY → direct Anthropic API
+        2. AWS credentials → Bedrock
+        3. Prompt for API key → direct Anthropic API
+        """
+        import anthropic
+
+        if _has_anthropic_api_key():
+            print("  Auth: using Anthropic API key")
+            return anthropic.Anthropic()
+
+        if _has_aws_credentials():
+            print(f"  Auth: using AWS Bedrock (region={self.region})")
+            return anthropic.AnthropicBedrock(aws_region=self.region)
+
+        _prompt_api_key()
+        print("  Auth: using Anthropic API key")
+        return anthropic.Anthropic()
+
+    def _resolve_model(self, client):
+        """Return the model ID appropriate for the client type."""
+        import anthropic
+
+        if isinstance(client, anthropic.AnthropicBedrock):
+            return BEDROCK_MODEL_MAP.get(self.model, self.model)
+        return self.model
 
     def check_dependencies(self):
         """Return list of missing dependencies (hard blockers only)."""
@@ -97,10 +148,10 @@ class ClaudeVisionEngine:
 
     def process_file(self, file_path):
         """Process a single file and write OCR output to output/."""
-        import anthropic
         from pdf2image import convert_from_path
 
-        ensure_api_key()
+        client = self._get_client()
+        model = self._resolve_model(client)
 
         file_path = Path(file_path)
         ext = file_path.suffix.lower()
@@ -140,10 +191,9 @@ class ClaudeVisionEngine:
             print(f"Error: Unsupported file format '{ext}'", file=sys.stderr)
             return
 
-        print(f"  Sending to Claude ({self.model})...")
-        client = anthropic.Anthropic()
+        print(f"  Sending to Claude ({model})...")
         message = client.messages.create(
-            model=self.model,
+            model=model,
             max_tokens=8192,
             system=SYSTEM_PROMPT,
             messages=[
