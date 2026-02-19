@@ -42,6 +42,7 @@ class Spinner:
         self._thread = None
         self._extra = ""
         self._start_time = 0
+        self.elapsed = 0
 
     def _run(self):
         i = 0

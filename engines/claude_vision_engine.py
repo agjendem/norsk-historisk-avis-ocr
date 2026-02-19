@@ -280,7 +280,7 @@ class ClaudeVisionEngine:
                     if token_count % 20 == 0:
                         spinner.update(f"~{token_count} tokens")
                 message = stream.get_final_message()
-                elapsed = spinner.elapsed
+            elapsed = spinner.elapsed
         except Exception as exc:
             import anthropic
 
