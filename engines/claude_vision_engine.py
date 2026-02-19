@@ -192,30 +192,67 @@ class ClaudeVisionEngine:
             return
 
         print(f"  Sending to Claude ({model})...")
-        message = client.messages.create(
-            model=model,
-            max_tokens=8192,
-            system=SYSTEM_PROMPT,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": media_type,
-                                "data": image_data,
+        try:
+            message = client.messages.create(
+                model=model,
+                max_tokens=8192,
+                system=SYSTEM_PROMPT,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": media_type,
+                                    "data": image_data,
+                                },
                             },
-                        },
-                        {
-                            "type": "text",
-                            "text": USER_PROMPT,
-                        },
-                    ],
-                }
-            ],
-        )
+                            {
+                                "type": "text",
+                                "text": USER_PROMPT,
+                            },
+                        ],
+                    }
+                ],
+            )
+        except Exception as exc:
+            import anthropic
+
+            if isinstance(exc, anthropic.AuthenticationError):
+                print(
+                    "Error: Authentication failed — your API key is invalid or expired.",
+                    file=sys.stderr,
+                )
+                print(
+                    "  Get a key at: https://console.anthropic.com/settings/keys",
+                    file=sys.stderr,
+                )
+                # Remove bad key from .env so next run re-prompts
+                env_file = PROJECT_DIR / ".env"
+                if env_file.exists():
+                    env_file.unlink()
+                    print("  (Removed .env — you will be prompted for a new key next run)")
+            elif isinstance(exc, anthropic.PermissionDeniedError):
+                print(
+                    "Error: Permission denied — your credentials lack access to this model.",
+                    file=sys.stderr,
+                )
+                if isinstance(client, anthropic.AnthropicBedrock):
+                    print(
+                        "  Ensure the model is enabled in your AWS Bedrock console for"
+                        f" region {self.region}.",
+                        file=sys.stderr,
+                    )
+                else:
+                    print(
+                        "  Check your API key permissions at: https://console.anthropic.com/settings/keys",
+                        file=sys.stderr,
+                    )
+            else:
+                raise
+            return
 
         text = message.content[0].text
         txt_path.write_text(text + "\n", encoding="utf-8")
