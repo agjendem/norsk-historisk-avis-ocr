@@ -51,6 +51,20 @@ Output clean flowing text with paragraph breaks preserved. \
 Do not skip or summarize any content.\
 """
 
+COLUMN_USER_PROMPT = """\
+Transcribe the text in this single newspaper column. \
+Join hyphenated line-break words into whole words. \
+Output clean flowing text with paragraph breaks preserved. \
+Do not skip or summarize any content.\
+"""
+
+HEADER_USER_PROMPT = """\
+Transcribe the text in this newspaper header/title area. \
+This is the top section of the page containing the article title, subtitle, \
+and/or author byline. Output clean text preserving the heading structure. \
+Do not skip or summarize any content.\
+"""
+
 CORRECTION_SYSTEM_PROMPT = """\
 You are an expert proofreader specializing in historical Norwegian text. \
 You are given raw OCR output from a 1950s Norwegian newspaper scan. The OCR \
@@ -176,6 +190,157 @@ def _encode_image_under_limit(image, max_bytes=MAX_IMAGE_BYTES):
         quality = 95  # reset quality after resize
 
 
+def _detect_header_boundary(gray_pixels, width, height, threshold=200):
+    """Find the y-coordinate where newspaper columns begin.
+
+    Scans rows top-down looking for the first row where the vertical projection
+    shows multiple distinct text regions separated by gaps — indicating the
+    start of multi-column layout.
+
+    Returns the y-coordinate of the column start, or 0 if no header detected.
+    """
+    # Minimum gap width (px) to count as a column separator
+    min_gap = 15
+    # Minimum number of column regions to consider it "multi-column"
+    min_columns = 2
+    # Scan in bands of rows to smooth out noise
+    band_height = 20
+
+    for y_start in range(0, height - band_height, band_height):
+        y_end = min(y_start + band_height, height)
+        # Count dark pixels per x-coordinate in this band
+        x_dark = [0] * width
+        for y in range(y_start, y_end):
+            for x in range(width):
+                if gray_pixels[x, y] < threshold:
+                    x_dark[x] += 1
+
+        # Classify each x as "has text" or "gap" in this band
+        band_rows = y_end - y_start
+        gap_threshold = band_rows * 0.01  # <1% dark pixels = gap
+        in_text = False
+        regions = 0
+        gap_width = 0
+
+        for x in range(width):
+            if x_dark[x] > gap_threshold:
+                if not in_text:
+                    if gap_width >= min_gap or regions == 0:
+                        regions += 1
+                    in_text = True
+                gap_width = 0
+            else:
+                in_text = False
+                gap_width += 1
+
+        if regions >= min_columns:
+            # Found multi-column layout — header ends here
+            # Go back a bit to avoid cutting into the first column row
+            return max(0, y_start)
+
+    return 0
+
+
+def _split_columns(image):
+    """Split a newspaper page image into header + individual column images.
+
+    Returns (header_image_or_None, [column_images]).
+    If only one column is detected, returns (None, [original_image]).
+    """
+    gray = image.convert("L")
+    width, height = gray.size
+    pixels = gray.load()
+
+    # Phase 1: detect header boundary
+    header_y = _detect_header_boundary(pixels, width, height)
+
+    header_image = None
+    if header_y > 0:
+        # Ensure we have meaningful header content (at least 30px tall)
+        if header_y >= 30:
+            header_image = image.crop((0, 0, width, header_y))
+        body_top = header_y
+    else:
+        body_top = 0
+
+    body_height = height - body_top
+    if body_height < 50:
+        # Body too small — treat entire image as single column
+        return (header_image, [image.crop((0, body_top, width, height))] if header_image else [image])
+
+    # Phase 2: detect column boundaries in the body region
+    # Compute vertical projection profile
+    v_profile = [0] * width
+    for x in range(width):
+        for y in range(body_top, height):
+            if pixels[x, y] < 200:
+                v_profile[x] += 1
+
+    # Look for divider lines: x-coordinates with very high dark pixel density
+    divider_threshold = body_height * 0.8
+    divider_xs = []
+    in_divider = False
+    div_start = 0
+    for x in range(width):
+        if v_profile[x] >= divider_threshold:
+            if not in_divider:
+                div_start = x
+                in_divider = True
+        else:
+            if in_divider:
+                divider_xs.append((div_start + x) // 2)  # center of divider
+                in_divider = False
+    if in_divider:
+        divider_xs.append((div_start + width - 1) // 2)
+
+    if divider_xs:
+        # Split at divider lines
+        boundaries = [0] + divider_xs + [width]
+    else:
+        # Fall back to gap detection
+        gap_threshold = body_height * 0.01
+        min_gap_width = 15
+        gaps = []
+        gap_start = None
+
+        for x in range(width):
+            if v_profile[x] <= gap_threshold:
+                if gap_start is None:
+                    gap_start = x
+            else:
+                if gap_start is not None:
+                    gap_width = x - gap_start
+                    if gap_width >= min_gap_width:
+                        gaps.append((gap_start + x) // 2)  # center of gap
+                    gap_start = None
+
+        if gaps:
+            boundaries = [0] + gaps + [width]
+        else:
+            # No columns detected — single column
+            if header_image:
+                return (header_image, [image.crop((0, body_top, width, height))])
+            return (None, [image])
+
+    # Crop column images
+    columns = []
+    for i in range(len(boundaries) - 1):
+        left = boundaries[i]
+        right = boundaries[i + 1]
+        # Skip very narrow slices (likely artifacts)
+        if right - left < 30:
+            continue
+        col_img = image.crop((left, body_top, right, height))
+        columns.append(col_img)
+
+    if not columns:
+        if header_image:
+            return (header_image, [image.crop((0, body_top, width, height))])
+        return (None, [image])
+
+    return (header_image, columns)
+
+
 BEDROCK_MODEL_MAP = {
     "claude-sonnet-4-20250514": "us.anthropic.claude-sonnet-4-20250514-v1:0",
     "claude-opus-4-20250514": "us.anthropic.claude-opus-4-20250514-v1:0",
@@ -230,57 +395,14 @@ class ClaudeVisionEngine:
             missing.append("poppler (provides pdftoppm for PDF conversion)")
         return missing
 
-    def process_file(self, file_path):
-        """Process a single file and write OCR output to output/."""
-        from pdf2image import convert_from_path
+    def _ocr_image(self, client, model, image_data, media_type, label, user_prompt=USER_PROMPT):
+        """Send an image to Claude for OCR and return the result.
 
-        client = self._get_client()
-        model = self._resolve_model(client)
-
-        file_path = Path(file_path)
-        ext = file_path.suffix.lower()
-        stem = file_path.stem
-        txt_path = OUTPUT_DIR / f"{stem}{self.output_suffix}"
-
-        OUTPUT_DIR.mkdir(exist_ok=True)
-        print(f"Processing: {file_path}")
-
-        if ext in UNSUPPORTED_IMAGE_TYPES:
-            print(red(
-                "Error: TIFF format is not supported by Claude API. "
-                "Use tesseract engine instead."
-            ), file=sys.stderr)
-            return
-
-        if ext == ".pdf":
-            from PIL import Image
-
-            print(f"  Converting PDF to image (DPI={self.dpi})...")
-            images = convert_from_path(
-                str(file_path),
-                dpi=self.dpi,
-                first_page=1,
-                last_page=1,
-                poppler_path=_poppler_path,
-            )
-            image_data, media_type = _encode_image_under_limit(images[0])
-        elif ext in MEDIA_TYPES:
-            from PIL import Image
-
-            raw = file_path.read_bytes()
-            if len(raw) <= MAX_IMAGE_BYTES:  # raw bytes, not base64 — matches API check
-                media_type = MEDIA_TYPES[ext]
-                image_data = base64.standard_b64encode(raw).decode("utf-8")
-            else:
-                image_data, media_type = _encode_image_under_limit(
-                    Image.open(file_path)
-                )
-        else:
-            print(red(f"Error: Unsupported file format '{ext}'"), file=sys.stderr)
-            return
-
+        Returns (text, input_tokens, output_tokens, elapsed) on success, or None on error.
+        The first error in a session prints full diagnostics; subsequent errors are brief.
+        """
         try:
-            with Spinner(f"Sending to Claude ({model})") as spinner, \
+            with Spinner(f"  {label}: sending to Claude") as spinner, \
                  client.messages.stream(
                     model=model,
                     max_tokens=self.max_tokens,
@@ -300,7 +422,7 @@ class ClaudeVisionEngine:
                                 },
                                 {
                                     "type": "text",
-                                    "text": USER_PROMPT,
+                                    "text": user_prompt,
                                 },
                             ],
                         }
@@ -314,57 +436,14 @@ class ClaudeVisionEngine:
                 message = stream.get_final_message()
             elapsed = spinner.elapsed
         except Exception as exc:
-            import anthropic
-
-            if isinstance(exc, anthropic.AuthenticationError):
-                print(red(
-                    "Error: Authentication failed — your API key is invalid or expired."
-                ), file=sys.stderr)
-                print(red(
-                    "  Get a key at: https://platform.claude.com/settings/keys"
-                ), file=sys.stderr)
-                # Remove bad key from .env so next run re-prompts
-                env_file = PROJECT_DIR / ".env"
-                if env_file.exists():
-                    env_file.unlink()
-                    print(red("  (Removed .env — you will be prompted for a new key next run)"))
-            elif isinstance(exc, anthropic.PermissionDeniedError):
-                print(red(
-                    "Error: Permission denied — your credentials lack access to this model."
-                ), file=sys.stderr)
-                if isinstance(client, anthropic.AnthropicBedrock):
-                    print(red(
-                        "  Ensure the model is enabled in your AWS Bedrock console for"
-                        f" region {self.region}."
-                    ), file=sys.stderr)
-                else:
-                    print(red(
-                        "  Check your API key permissions at: https://platform.claude.com/settings/keys"
-                    ), file=sys.stderr)
-            elif isinstance(exc, anthropic.APIConnectionError):
-                print(red(
-                    "Error: Could not connect to the API."
-                ), file=sys.stderr)
-                print(red(
-                    "  Check your internet connection and try again."
-                ), file=sys.stderr)
-                if isinstance(client, anthropic.AnthropicBedrock):
-                    print(red(
-                        f"  Also verify that Bedrock is available in region {self.region}."
-                    ), file=sys.stderr)
-            elif isinstance(exc, anthropic.APIStatusError):
-                print(red(
-                    f"Error: API returned {exc.status_code} — {exc.message}"
-                ), file=sys.stderr)
-            else:
-                raise
-            return
+            self._handle_api_error(exc, client)
+            return None
 
         usage = message.usage
         stop = message.stop_reason
         status = "complete" if stop == "end_turn" else "truncated"
         print(yellow(
-            f"  {status.capitalize()} in {elapsed:.1f}s"
+            f"  {label}: {status} in {elapsed:.1f}s"
             f"  ({usage.input_tokens} in / {usage.output_tokens} out)"
         ))
         if stop == "max_tokens":
@@ -373,13 +452,154 @@ class ClaudeVisionEngine:
                 " Re-run with a higher --max-tokens value to get the full text."
             ))
 
-        text = message.content[0].text
-        txt_path.write_text(text + "\n", encoding="utf-8")
-        print(green(f"  -> {txt_path}"))
+        return (message.content[0].text, usage.input_tokens, usage.output_tokens, elapsed)
+
+    def _handle_api_error(self, exc, client):
+        """Print diagnostics for API errors."""
+        import anthropic
+
+        if isinstance(exc, anthropic.AuthenticationError):
+            print(red(
+                "Error: Authentication failed — your API key is invalid or expired."
+            ), file=sys.stderr)
+            print(red(
+                "  Get a key at: https://platform.claude.com/settings/keys"
+            ), file=sys.stderr)
+            env_file = PROJECT_DIR / ".env"
+            if env_file.exists():
+                env_file.unlink()
+                print(red("  (Removed .env — you will be prompted for a new key next run)"))
+        elif isinstance(exc, anthropic.PermissionDeniedError):
+            print(red(
+                "Error: Permission denied — your credentials lack access to this model."
+            ), file=sys.stderr)
+            if isinstance(client, anthropic.AnthropicBedrock):
+                print(red(
+                    "  Ensure the model is enabled in your AWS Bedrock console for"
+                    f" region {self.region}."
+                ), file=sys.stderr)
+            else:
+                print(red(
+                    "  Check your API key permissions at: https://platform.claude.com/settings/keys"
+                ), file=sys.stderr)
+        elif isinstance(exc, anthropic.APIConnectionError):
+            print(red(
+                "Error: Could not connect to the API."
+            ), file=sys.stderr)
+            print(red(
+                "  Check your internet connection and try again."
+            ), file=sys.stderr)
+            if isinstance(client, anthropic.AnthropicBedrock):
+                print(red(
+                    f"  Also verify that Bedrock is available in region {self.region}."
+                ), file=sys.stderr)
+        elif isinstance(exc, anthropic.APIStatusError):
+            print(red(
+                f"Error: API returned {exc.status_code} — {exc.message}"
+            ), file=sys.stderr)
+        else:
+            raise
+
+    def process_file(self, file_path):
+        """Process a single file: split into columns, OCR each, and write output."""
+        from pdf2image import convert_from_path
+        from PIL import Image
+
+        client = self._get_client()
+        model = self._resolve_model(client)
+
+        file_path = Path(file_path)
+        ext = file_path.suffix.lower()
+        stem = file_path.stem
+
+        OUTPUT_DIR.mkdir(exist_ok=True)
+        print(f"Processing: {file_path}")
+
+        if ext in UNSUPPORTED_IMAGE_TYPES:
+            print(red(
+                "Error: TIFF format is not supported by Claude API. "
+                "Use tesseract engine instead."
+            ), file=sys.stderr)
+            return
+
+        # Load the full page image
+        if ext == ".pdf":
+            print(f"  Converting PDF to image (DPI={self.dpi})...")
+            images = convert_from_path(
+                str(file_path),
+                dpi=self.dpi,
+                first_page=1,
+                last_page=1,
+                poppler_path=_poppler_path,
+            )
+            page_image = images[0]
+        elif ext in MEDIA_TYPES:
+            page_image = Image.open(file_path)
+        else:
+            print(red(f"Error: Unsupported file format '{ext}'"), file=sys.stderr)
+            return
+
+        # Split into header + columns
+        header_image, column_images = _split_columns(page_image)
+        n_cols = len(column_images)
+        header_info = " + header" if header_image else ""
+        print(yellow(f"  Detected {n_cols} column{'s' if n_cols != 1 else ''}{header_info}"))
+
+        # Create sub-folder for this file
+        sub_dir = OUTPUT_DIR / stem
+        sub_dir.mkdir(exist_ok=True)
+
+        total_in = 0
+        total_out = 0
+        total_elapsed = 0.0
+        sections = []  # (label, text) for concatenation
+
+        # OCR header if present
+        if header_image:
+            image_data, media_type = _encode_image_under_limit(header_image)
+            result = self._ocr_image(client, model, image_data, media_type,
+                                     "Header", user_prompt=HEADER_USER_PROMPT)
+            if result is None:
+                return
+            text, in_tok, out_tok, elapsed = result
+            total_in += in_tok
+            total_out += out_tok
+            total_elapsed += elapsed
+            (sub_dir / "header.txt").write_text(text + "\n", encoding="utf-8")
+            print(green(f"  -> {sub_dir / 'header.txt'}"))
+            sections.append(("header", text))
+
+        # OCR each column
+        for i, col_image in enumerate(column_images, 1):
+            image_data, media_type = _encode_image_under_limit(col_image)
+            prompt = COLUMN_USER_PROMPT if n_cols > 1 else USER_PROMPT
+            result = self._ocr_image(client, model, image_data, media_type,
+                                     f"Column {i}/{n_cols}", user_prompt=prompt)
+            if result is None:
+                return
+            text, in_tok, out_tok, elapsed = result
+            total_in += in_tok
+            total_out += out_tok
+            total_elapsed += elapsed
+            col_file = sub_dir / f"column-{i}.txt"
+            col_file.write_text(text + "\n", encoding="utf-8")
+            print(green(f"  -> {col_file}"))
+            sections.append((f"column-{i}", text))
+
+        # Concatenate all sections into combined file
+        combined_text = "\n\n".join(text for _, text in sections)
+        combined_path = sub_dir / f"combined{self.output_suffix}"
+        combined_path.write_text(combined_text + "\n", encoding="utf-8")
+        print(green(f"  -> {combined_path}"))
+
+        print(yellow(
+            f"  Total: {total_elapsed:.1f}s"
+            f"  ({total_in} in / {total_out} out)"
+        ))
 
         # Post-processing: correct OCR errors via a second text-only pass
-        corrected_path = OUTPUT_DIR / f"{stem}{self.output_suffix.replace('.txt', '.corrected.txt')}"
-        corrected = self._correct_ocr(client, model, text)
+        corrected_path = sub_dir / f"combined{self.output_suffix.replace('.txt', '.corrected.txt')}"
+        corrected = self._correct_ocr(client, model, combined_text)
         if corrected:
             corrected_path.write_text(corrected + "\n", encoding="utf-8")
             print(green(f"  -> {corrected_path}"))

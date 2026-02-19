@@ -42,7 +42,8 @@ def list_files(output_suffix):
     for i, f in enumerate(files, 1):
         stem = f.stem
         marker = ""
-        if (OUTPUT_DIR / f"{stem}{output_suffix}").exists():
+        sub_dir = OUTPUT_DIR / stem
+        if (sub_dir / f"combined{output_suffix}").exists():
             marker = green(" [done]")
         print(f"  {i}) {f.name}{marker}")
     print("  q) Quit")
