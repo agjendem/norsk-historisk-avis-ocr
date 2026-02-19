@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+usage() {
+    cat <<EOF
+Usage: ./ocr <engine> [options] [files...]
+
+Engines:
+  tesseract       Tesseract OCR (local, offline)
+  claude-vision   Claude Vision API (requires API key)
+
+Examples:
+  ./ocr tesseract                        # OCR all PDFs in input/
+  ./ocr tesseract input/page.pdf         # OCR a specific PDF
+  ./ocr claude-vision                    # Vision OCR all PDFs in input/
+  ./ocr claude-vision --dpi 400          # Custom DPI
+
+Setup:
+  ./tesseract/setup.sh                   # Install Tesseract dependencies
+  ./claude-vision/setup.sh               # Install Claude Vision dependencies
+EOF
+}
+
+ensure_api_key() {
+    # Already in environment
+    if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
+        return
+    fi
+
+    # Try loading from .env
+    if [[ -f "$PROJECT_DIR/.env" ]]; then
+        # shellcheck disable=SC1091
+        source "$PROJECT_DIR/.env"
+        if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
+            export ANTHROPIC_API_KEY
+            return
+        fi
+    fi
+
+    # Prompt interactively
+    echo "No ANTHROPIC_API_KEY found in environment or .env file."
+    printf "Enter your Anthropic API key: "
+    read -r key
+    if [[ -z "$key" ]]; then
+        echo "Error: API key is required for claude-vision." >&2
+        exit 1
+    fi
+    echo "ANTHROPIC_API_KEY=$key" > "$PROJECT_DIR/.env"
+    export ANTHROPIC_API_KEY="$key"
+    echo "Saved to .env"
+}
+
+if [[ "${1:-}" == "--help" ]] || [[ "${1:-}" == "-h" ]]; then
+    usage
+    exit 0
+fi
+
+if [[ $# -eq 0 ]]; then
+    echo "Select an OCR engine:"
+    echo "  1) tesseract"
+    echo "  2) claude-vision"
+    printf "Choice [1-2]: "
+    read -r choice
+    case "$choice" in
+        1) ENGINE="tesseract" ;;
+        2) ENGINE="claude-vision" ;;
+        *)
+            echo "Error: Invalid choice '$choice'" >&2
+            exit 1
+            ;;
+    esac
+else
+    ENGINE="$1"
+    shift
+fi
+
+case "$ENGINE" in
+    tesseract)
+        if ! command -v tesseract &>/dev/null || ! command -v pdftoppm &>/dev/null; then
+            echo "Missing dependencies for tesseract engine."
+            printf "Run tesseract/setup.sh now? [Y/n] "
+            read -r answer
+            if [[ "${answer,,}" =~ ^(y|)$ ]]; then
+                "$PROJECT_DIR/tesseract/setup.sh"
+            else
+                exit 1
+            fi
+        fi
+        exec "$PROJECT_DIR/tesseract/ocr.sh" "$@"
+        ;;
+    claude-vision)
+        if ! command -v pdftoppm &>/dev/null || [[ ! -f "$PROJECT_DIR/.venv/bin/python" ]]; then
+            echo "Missing dependencies for claude-vision engine."
+            printf "Run claude-vision/setup.sh now? [Y/n] "
+            read -r answer
+            if [[ "${answer,,}" =~ ^(y|)$ ]]; then
+                "$PROJECT_DIR/claude-vision/setup.sh"
+            else
+                exit 1
+            fi
+        fi
+        ensure_api_key
+        # Activate venv if it exists
+        if [[ -f "$PROJECT_DIR/.venv/bin/activate" ]]; then
+            # shellcheck disable=SC1091
+            source "$PROJECT_DIR/.venv/bin/activate"
+        fi
+        exec "$PROJECT_DIR/claude-vision/ocr.py" "$@"
+        ;;
+    *)
+        echo "Error: Unknown engine '$ENGINE'" >&2
+        echo "" >&2
+        usage >&2
+        exit 1
+        ;;
+esac
