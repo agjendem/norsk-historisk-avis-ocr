@@ -4,6 +4,8 @@ import platform
 import shutil
 from pathlib import Path
 
+from engines._colors import green, red
+
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 OUTPUT_DIR = PROJECT_DIR / "output"
 
@@ -72,8 +74,8 @@ class TesseractEngine:
             img = Image.open(file_path)
             text = pytesseract.image_to_string(img, lang=self.lang)
         else:
-            print(f"Error: Unsupported file format '{ext}'")
+            print(red(f"Error: Unsupported file format '{ext}'"))
             return
 
         txt_path.write_text(text, encoding="utf-8")
-        print(f"  -> {txt_path}")
+        print(green(f"  -> {txt_path}"))

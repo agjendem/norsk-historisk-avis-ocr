@@ -9,6 +9,8 @@ import shutil
 import sys
 from pathlib import Path
 
+from engines._colors import green, yellow, red
+
 try:
     import truststore
     truststore.inject_into_ssl()
@@ -88,11 +90,11 @@ def _has_aws_credentials():
 
 def _prompt_api_key():
     """Prompt for Anthropic API key and save to .env."""
-    print("No ANTHROPIC_API_KEY found in environment or .env file.")
-    print("No AWS credentials detected for Bedrock.")
+    print(yellow("No ANTHROPIC_API_KEY found in environment or .env file."))
+    print(yellow("No AWS credentials detected for Bedrock."))
     key = getpass.getpass("Enter your Anthropic API key: ").strip()
     if not key:
-        print("Error: API key is required for claude-vision.", file=sys.stderr)
+        print(red("Error: API key is required for claude-vision."), file=sys.stderr)
         sys.exit(1)
 
     env_file = PROJECT_DIR / ".env"
@@ -152,15 +154,15 @@ class ClaudeVisionEngine:
         import anthropic
 
         if _has_anthropic_api_key():
-            print("  Auth: using Anthropic API key")
+            print(yellow("  Auth: using Anthropic API key"))
             return anthropic.Anthropic()
 
         if _has_aws_credentials():
-            print(f"  Auth: using AWS Bedrock (region={self.region})")
+            print(yellow(f"  Auth: using AWS Bedrock (region={self.region})"))
             return anthropic.AnthropicBedrock(aws_region=self.region)
 
         _prompt_api_key()
-        print("  Auth: using Anthropic API key")
+        print(yellow("  Auth: using Anthropic API key"))
         return anthropic.Anthropic()
 
     def _resolve_model(self, client):
@@ -194,11 +196,10 @@ class ClaudeVisionEngine:
         print(f"Processing: {file_path}")
 
         if ext in UNSUPPORTED_IMAGE_TYPES:
-            print(
+            print(red(
                 "Error: TIFF format is not supported by Claude API. "
-                "Use tesseract engine instead.",
-                file=sys.stderr,
-            )
+                "Use tesseract engine instead."
+            ), file=sys.stderr)
             return
 
         if ext == ".pdf":
@@ -225,10 +226,10 @@ class ClaudeVisionEngine:
                     Image.open(file_path)
                 )
         else:
-            print(f"Error: Unsupported file format '{ext}'", file=sys.stderr)
+            print(red(f"Error: Unsupported file format '{ext}'"), file=sys.stderr)
             return
 
-        print(f"  Sending to Claude ({model})...")
+        print(yellow(f"  Sending to Claude ({model})..."))
         try:
             message = client.messages.create(
                 model=model,
@@ -258,58 +259,49 @@ class ClaudeVisionEngine:
             import anthropic
 
             if isinstance(exc, anthropic.AuthenticationError):
-                print(
-                    "Error: Authentication failed — your API key is invalid or expired.",
-                    file=sys.stderr,
-                )
-                print(
-                    "  Get a key at: https://platform.claude.com/settings/keys",
-                    file=sys.stderr,
-                )
+                print(red(
+                    "Error: Authentication failed — your API key is invalid or expired."
+                ), file=sys.stderr)
+                print(red(
+                    "  Get a key at: https://platform.claude.com/settings/keys"
+                ), file=sys.stderr)
                 # Remove bad key from .env so next run re-prompts
                 env_file = PROJECT_DIR / ".env"
                 if env_file.exists():
                     env_file.unlink()
-                    print("  (Removed .env — you will be prompted for a new key next run)")
+                    print(red("  (Removed .env — you will be prompted for a new key next run)"))
             elif isinstance(exc, anthropic.PermissionDeniedError):
-                print(
-                    "Error: Permission denied — your credentials lack access to this model.",
-                    file=sys.stderr,
-                )
+                print(red(
+                    "Error: Permission denied — your credentials lack access to this model."
+                ), file=sys.stderr)
                 if isinstance(client, anthropic.AnthropicBedrock):
-                    print(
+                    print(red(
                         "  Ensure the model is enabled in your AWS Bedrock console for"
-                        f" region {self.region}.",
-                        file=sys.stderr,
-                    )
+                        f" region {self.region}."
+                    ), file=sys.stderr)
                 else:
-                    print(
-                        "  Check your API key permissions at: https://platform.claude.com/settings/keys",
-                        file=sys.stderr,
-                    )
+                    print(red(
+                        "  Check your API key permissions at: https://platform.claude.com/settings/keys"
+                    ), file=sys.stderr)
             elif isinstance(exc, anthropic.APIConnectionError):
-                print(
-                    "Error: Could not connect to the API.",
-                    file=sys.stderr,
-                )
-                print(
-                    "  Check your internet connection and try again.",
-                    file=sys.stderr,
-                )
+                print(red(
+                    "Error: Could not connect to the API."
+                ), file=sys.stderr)
+                print(red(
+                    "  Check your internet connection and try again."
+                ), file=sys.stderr)
                 if isinstance(client, anthropic.AnthropicBedrock):
-                    print(
-                        f"  Also verify that Bedrock is available in region {self.region}.",
-                        file=sys.stderr,
-                    )
+                    print(red(
+                        f"  Also verify that Bedrock is available in region {self.region}."
+                    ), file=sys.stderr)
             elif isinstance(exc, anthropic.APIStatusError):
-                print(
-                    f"Error: API returned {exc.status_code} — {exc.message}",
-                    file=sys.stderr,
-                )
+                print(red(
+                    f"Error: API returned {exc.status_code} — {exc.message}"
+                ), file=sys.stderr)
             else:
                 raise
             return
 
         text = message.content[0].text
         txt_path.write_text(text + "\n", encoding="utf-8")
-        print(f"  -> {txt_path}")
+        print(green(f"  -> {txt_path}"))

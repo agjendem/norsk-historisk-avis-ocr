@@ -16,6 +16,7 @@ import sys
 from pathlib import Path
 
 from engines import ENGINE_NAMES, _get_engines
+from engines._colors import green, yellow, red
 
 PROJECT_DIR = Path(__file__).resolve().parent
 INPUT_DIR = PROJECT_DIR / "input"
@@ -42,7 +43,7 @@ def list_files(output_suffix):
         stem = f.stem
         marker = ""
         if (OUTPUT_DIR / f"{stem}{output_suffix}").exists():
-            marker = " [done]"
+            marker = green(" [done]")
         print(f"  {i}) {f.name}{marker}")
     print("  q) Quit")
     print()
@@ -55,14 +56,14 @@ def select_engine():
     print("Select an OCR engine:")
     for i, name in enumerate(ENGINE_NAMES, 1):
         print(f"  {i}) {name}")
-    choice = input(f"Choice [1-{len(ENGINE_NAMES)}]: ").strip()
+    choice = input(green(f"Choice [1-{len(ENGINE_NAMES)}]: ")).strip()
     try:
         idx = int(choice) - 1
         if 0 <= idx < len(ENGINE_NAMES):
             return ENGINE_NAMES[idx]
     except ValueError:
         pass
-    print(f"Error: Invalid choice '{choice}'", file=sys.stderr)
+    print(red(f"Error: Invalid choice '{choice}'"), file=sys.stderr)
     sys.exit(1)
 
 
@@ -107,10 +108,10 @@ def main():
     # Dependency check
     missing = engine.check_dependencies()
     if missing:
-        print(f"Missing dependencies for {engine_name}:")
+        print(red(f"Missing dependencies for {engine_name}:"))
         for item in missing:
-            print(f"  - {item}")
-        answer = input("Run setup.py now? [Y/n] ").strip().lower()
+            print(red(f"  - {item}"))
+        answer = input(green("Run setup.py now? [Y/n] ")).strip().lower()
         if answer in ("", "y", "yes"):
             import subprocess
             subprocess.run([sys.executable, str(PROJECT_DIR / "setup.py")], check=True)
@@ -127,7 +128,7 @@ def main():
         if files is None:
             break
 
-        selection = input(f"Select file [1-{len(files)} or q]: ").strip()
+        selection = input(green(f"Select file [1-{len(files)} or q]: ")).strip()
 
         if selection.lower() == "q":
             print("Bye.")
@@ -140,12 +141,12 @@ def main():
                 try:
                     engine.process_file(files[idx])
                 except Exception as e:
-                    print(f"Error: {e}", file=sys.stderr)
+                    print(red(f"Error: {e}"), file=sys.stderr)
                 continue
         except ValueError:
             pass
 
-        print(f"Invalid selection '{selection}'")
+        print(red(f"Invalid selection '{selection}'"))
 
 
 if __name__ == "__main__":
