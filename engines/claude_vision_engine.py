@@ -323,9 +323,9 @@ def _find_gap_boundaries(gray_pixels, x_start, x_end, y_start, y_end,
     return boundaries
 
 
-def _save_debug_images(image, boundaries, debug_dir, body_top=0):
+def _save_debug_images(image, boundaries, debug_dir, body_top=0, overlap_px=0):
     """Save annotated page image, column crops, and detection info."""
-    from PIL import ImageDraw, ImageFont
+    from PIL import Image, ImageDraw, ImageFont
 
     debug_dir.mkdir(parents=True, exist_ok=True)
     width, height = image.size
@@ -336,16 +336,31 @@ def _save_debug_images(image, boundaries, debug_dir, body_top=0):
     for i, bx in enumerate(boundaries):
         if 0 < bx < width:
             draw.line([(bx, 0), (bx, height)], fill="blue", width=2)
+    # Draw overlap regions as semi-transparent red shading
+    if overlap_px > 0:
+        overlay = Image.new("RGBA", annotated.size, (0, 0, 0, 0))
+        overlay_draw = ImageDraw.Draw(overlay)
+        for bx in boundaries:
+            if 0 < bx < width:
+                ol = max(0, bx - overlap_px)
+                or_ = min(width, bx + overlap_px)
+                overlay_draw.rectangle(
+                    [(ol, 0), (or_, height)],
+                    fill=(255, 0, 0, 40),
+                )
+        annotated = Image.alpha_composite(annotated.convert("RGBA"), overlay)
+        annotated = annotated.convert("RGB")
     # Label columns
+    draw = ImageDraw.Draw(annotated)
     for i in range(len(boundaries) - 1):
         cx = (boundaries[i] + boundaries[i + 1]) // 2
         draw.text((cx - 10, 10), str(i + 1), fill="blue")
     annotated.save(debug_dir / "page_annotated.png")
 
-    # Column crops
+    # Column crops (with overlap padding matching OCR crops)
     for i in range(len(boundaries) - 1):
-        left = boundaries[i]
-        right = boundaries[i + 1]
+        left = max(0, boundaries[i] - overlap_px)
+        right = min(width, boundaries[i + 1] + overlap_px)
         if right - left < 30:
             continue
         col_img = image.crop((left, body_top, right, height))
@@ -355,23 +370,37 @@ def _save_debug_images(image, boundaries, debug_dir, body_top=0):
     info_lines = [
         f"Image size: {width} x {height}",
         f"Body top: {body_top}",
+        f"Overlap padding: {overlap_px}px",
         f"Boundaries: {boundaries}",
         f"Columns: {len(boundaries) - 1}",
         "",
     ]
     for i in range(len(boundaries) - 1):
         w = boundaries[i + 1] - boundaries[i]
-        info_lines.append(f"  Column {i + 1}: x={boundaries[i]}-{boundaries[i + 1]}, width={w}px")
+        pad_left = min(overlap_px, boundaries[i])
+        pad_right = min(overlap_px, width - boundaries[i + 1])
+        crop_w = w + pad_left + pad_right
+        info_lines.append(
+            f"  Column {i + 1}: x={boundaries[i]}-{boundaries[i + 1]}, "
+            f"width={w}px, crop={crop_w}px (pad L={pad_left} R={pad_right})"
+        )
     (debug_dir / "detection_info.txt").write_text("\n".join(info_lines) + "\n", encoding="utf-8")
 
 
-def _split_columns(image, debug_dir=None):
+def _split_columns(image, debug_dir=None, overlap_px=20):
     """Split a newspaper page image into individual column images.
 
     Uses a three-phase algorithm:
     1. Detect ink divider lines via vertical projection profile
     2. Subdivide wide segments using row-by-row gap voting
-    3. Merge boundaries, crop columns
+    3. Merge boundaries, crop columns with overlap padding
+
+    Args:
+        image: PIL Image of the full page.
+        debug_dir: Optional directory to save debug images.
+        overlap_px: Pixels of padding to add on each side of every column
+            crop. Compensates for non-linear scan distortion that shifts
+            gutter positions across the page height. Default 20px.
 
     Returns (None, [column_images]).
     Header detection is not performed (headers that don't span full width
@@ -446,12 +475,16 @@ def _split_columns(image, debug_dir=None):
         right = boundaries[i + 1]
         if right - left < 30:
             continue
-        col_img = image.crop((left, body_top, right, height))
+        # Apply overlap padding, clamped to image bounds
+        crop_left = max(0, left - overlap_px)
+        crop_right = min(width, right + overlap_px)
+        col_img = image.crop((crop_left, body_top, crop_right, height))
         columns.append(col_img)
         final_boundaries.append(right)
 
     if debug_dir:
-        _save_debug_images(image, final_boundaries, debug_dir, body_top)
+        _save_debug_images(image, final_boundaries, debug_dir, body_top,
+                           overlap_px=overlap_px)
 
     if not columns:
         return (None, [image])
