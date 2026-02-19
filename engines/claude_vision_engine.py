@@ -51,6 +51,34 @@ Output clean flowing text with paragraph breaks preserved. \
 Do not skip or summarize any content.\
 """
 
+CORRECTION_SYSTEM_PROMPT = """\
+You are an expert proofreader specializing in historical Norwegian text. \
+You are given raw OCR output from a 1950s Norwegian newspaper scan. The OCR \
+contains errors from misread characters, especially in fraktur/antiqua typefaces.
+
+Your task is to correct obvious OCR errors while preserving the original text \
+as faithfully as possible.
+
+Rules:
+- Fix clear character-level OCR errors (e.g. rn\u2192m, li\u2192h, cl\u2192d, \
+\u00f8\u2192o, \u00e6\u2192ae confusions, doubled/missing letters).
+- Fix garbled words where the correct Norwegian word is obvious from context.
+- Preserve the original paragraph structure, line breaks, and formatting exactly.
+- Preserve \u00ab\u00bb quotes, headings, and verse formatting.
+- Do NOT rewrite, modernize spelling, or rephrase. Keep the 1950s Norwegian \
+orthography (e.g. \u00abbleven\u00bb not \u00abblitt\u00bb, \u00abhvad\u00bb not \u00abhva\u00bb).
+- If a word is ambiguous and you cannot determine the correct reading, leave it \
+as-is with [?] after it.
+- Do NOT add commentary or notes. Output only the corrected text.
+- NEVER remove or summarize content. The output must have the same amount of \
+text as the input.\
+"""
+
+CORRECTION_USER_PROMPT = """\
+Correct OCR errors in the following text from a 1950s Norwegian newspaper. \
+Fix only clear misreadings. Preserve original spelling and structure.\n\n{text}\
+"""
+
 MEDIA_TYPES = {
     ".png": "image/png",
     ".jpg": "image/jpeg",
@@ -256,6 +284,7 @@ class ClaudeVisionEngine:
                  client.messages.stream(
                     model=model,
                     max_tokens=self.max_tokens,
+                    temperature=0,
                     system=SYSTEM_PROMPT,
                     messages=[
                         {
@@ -347,3 +376,51 @@ class ClaudeVisionEngine:
         text = message.content[0].text
         txt_path.write_text(text + "\n", encoding="utf-8")
         print(green(f"  -> {txt_path}"))
+
+        # Post-processing: correct OCR errors via a second text-only pass
+        corrected_path = OUTPUT_DIR / f"{stem}{self.output_suffix.replace('.txt', '.corrected.txt')}"
+        corrected = self._correct_ocr(client, model, text)
+        if corrected:
+            corrected_path.write_text(corrected + "\n", encoding="utf-8")
+            print(green(f"  -> {corrected_path}"))
+
+    def _correct_ocr(self, client, model, text):
+        """Run a text-only correction pass on raw OCR output."""
+        try:
+            with Spinner("Correcting OCR errors") as spinner, \
+                 client.messages.stream(
+                    model=model,
+                    max_tokens=self.max_tokens,
+                    temperature=0,
+                    system=CORRECTION_SYSTEM_PROMPT,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": CORRECTION_USER_PROMPT.format(text=text),
+                        }
+                    ],
+                 ) as stream:
+                token_count = 0
+                for chunk in stream.text_stream:
+                    token_count += 1
+                    if token_count % 20 == 0:
+                        spinner.update(f"~{token_count} tokens")
+                message = stream.get_final_message()
+            elapsed = spinner.elapsed
+
+            usage = message.usage
+            stop = message.stop_reason
+            status = "complete" if stop == "end_turn" else "truncated"
+            print(yellow(
+                f"  {status.capitalize()} in {elapsed:.1f}s"
+                f"  ({usage.input_tokens} in / {usage.output_tokens} out)"
+            ))
+            if stop == "max_tokens":
+                print(yellow(
+                    f"  Warning: correction was truncated at {self.max_tokens} tokens."
+                    " Re-run with a higher --max-tokens value."
+                ))
+            return message.content[0].text
+        except Exception as exc:
+            print(red(f"  Correction pass failed: {exc}"), file=sys.stderr)
+            return None

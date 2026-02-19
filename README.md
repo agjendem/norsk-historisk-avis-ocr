@@ -32,6 +32,7 @@ Cloud OCR using the Anthropic Claude API. Sends the scanned page as an image to 
 - Output: `{filename}.vision-{dpi}dpi-{model}.txt`
 - Images are sharpened, contrast-boosted, and compressed to JPEG to fit the 5 MB API limit
 - Token usage (input/output) is printed after each call
+- Automatic post-processing pass corrects common OCR errors using a second text-only Claude call
 
 ## Authentication
 
@@ -101,7 +102,8 @@ The `--max-tokens` flag controls the output ceiling. It only affects cost if the
 Output filenames encode the engine settings for easy comparison:
 
 - Tesseract: `Filename.tesseract-300dpi.txt`
-- Claude Vision: `Filename.vision-300dpi-opus.txt`
+- Claude Vision: `Filename.vision-300dpi-opus.txt` (raw OCR)
+- Claude Vision corrected: `Filename.vision-300dpi-opus.corrected.txt` (post-processed)
 
 Re-running with different settings (e.g., `--dpi 150` or `--model claude-sonnet-4-20250514`) produces separate output files so you can compare results side by side.
 
