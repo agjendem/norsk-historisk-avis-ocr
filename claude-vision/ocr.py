@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """
-OCR pipeline using Claude's vision API.
+OCR engine using Claude's vision API.
 
-Converts PDFs to PNGs, sends them to Claude for transcription,
-and writes the result to text files.
+Processes a single PDF or image file: converts PDFs to PNGs first,
+sends images directly to Claude for transcription, and writes the
+result to a text file.
 
 Usage (via root CLI):
-    ./ocr claude-vision                         # process all PDFs in input/
-    ./ocr claude-vision input/somefile.pdf       # process specific files
-    ./ocr claude-vision --dpi 400 input/*.pdf    # custom DPI
+    ./ocr claude-vision                         # interactive file picker
+    ./ocr claude-vision --dpi 400               # custom DPI for PDF conversion
 
 Requires:
     - ANTHROPIC_API_KEY set in environment or .env file
-    - poppler (pdftoppm) installed
+    - poppler (pdftoppm) installed (for PDF input only)
 """
 
 import argparse
@@ -29,7 +29,6 @@ load_dotenv(PROJECT_DIR / ".env")
 
 import anthropic
 
-INPUT_DIR = PROJECT_DIR / "input"
 OUTPUT_DIR = PROJECT_DIR / "output"
 
 SYSTEM_PROMPT = """\
@@ -56,6 +55,14 @@ Join hyphenated line-break words into whole words. \
 Output clean flowing text with paragraph breaks preserved.\
 """
 
+MEDIA_TYPES = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+}
+
+UNSUPPORTED_IMAGE_TYPES = {".tiff", ".tif"}
+
 
 def pdf_to_png(pdf_path: Path, dpi: int) -> Path:
     """Convert a PDF to a PNG image using pdftoppm."""
@@ -72,9 +79,11 @@ def pdf_to_png(pdf_path: Path, dpi: int) -> Path:
     return png_path
 
 
-def transcribe_image(client: anthropic.Anthropic, png_path: Path, model: str) -> str:
-    """Send a PNG to Claude's vision API and get the transcription."""
-    image_data = base64.standard_b64encode(png_path.read_bytes()).decode("utf-8")
+def transcribe_image(
+    client: anthropic.Anthropic, image_path: Path, model: str, media_type: str
+) -> str:
+    """Send an image to Claude's vision API and get the transcription."""
+    image_data = base64.standard_b64encode(image_path.read_bytes()).decode("utf-8")
 
     message = client.messages.create(
         model=model,
@@ -88,7 +97,7 @@ def transcribe_image(client: anthropic.Anthropic, png_path: Path, model: str) ->
                         "type": "image",
                         "source": {
                             "type": "base64",
-                            "media_type": "image/png",
+                            "media_type": media_type,
                             "data": image_data,
                         },
                     },
@@ -104,32 +113,40 @@ def transcribe_image(client: anthropic.Anthropic, png_path: Path, model: str) ->
     return message.content[0].text
 
 
-def process_pdf(client: anthropic.Anthropic, pdf_path: Path, dpi: int, model: str) -> None:
-    """Full pipeline: PDF -> PNG -> Claude vision -> text file."""
-    stem = pdf_path.stem
+def process_file(
+    client: anthropic.Anthropic, file_path: Path, dpi: int, model: str
+) -> None:
+    """Process a single file: PDF or image -> Claude vision -> text file."""
+    stem = file_path.stem
+    ext = file_path.suffix.lower()
     txt_path = OUTPUT_DIR / f"{stem}.vision.txt"
 
-    print(f"Processing: {pdf_path}")
+    print(f"Processing: {file_path}")
 
-    # Step 1: PDF to PNG
-    print(f"  Converting to PNG (DPI={dpi})...")
-    png_path = pdf_to_png(pdf_path, dpi)
+    if ext == ".pdf":
+        print(f"  Converting to PNG (DPI={dpi})...")
+        png_path = pdf_to_png(file_path, dpi)
+        print(f"  Sending to Claude ({model})...")
+        text = transcribe_image(client, png_path, model, "image/png")
+        png_path.unlink(missing_ok=True)
+    elif ext in MEDIA_TYPES:
+        media_type = MEDIA_TYPES[ext]
+        print(f"  Sending to Claude ({model})...")
+        text = transcribe_image(client, file_path, model, media_type)
+    elif ext in UNSUPPORTED_IMAGE_TYPES:
+        print(f"Error: TIFF format is not supported by Claude API. Use tesseract engine instead.", file=sys.stderr)
+        sys.exit(1)
+    else:
+        print(f"Error: Unsupported file format '{ext}'", file=sys.stderr)
+        sys.exit(1)
 
-    # Step 2: Send to Claude vision API
-    print(f"  Sending to Claude ({model})...")
-    text = transcribe_image(client, png_path, model)
-
-    # Step 3: Write output
     txt_path.write_text(text + "\n", encoding="utf-8")
     print(f"  -> {txt_path}")
 
-    # Step 4: Clean up intermediate PNG
-    png_path.unlink(missing_ok=True)
-
 
 def main():
-    parser = argparse.ArgumentParser(description="OCR newspaper PDFs using Claude vision API")
-    parser.add_argument("files", nargs="*", help="PDF files to process (default: all in input/)")
+    parser = argparse.ArgumentParser(description="OCR a file using Claude vision API")
+    parser.add_argument("file", help="File to process (PDF, PNG, JPG, JPEG)")
     parser.add_argument("--dpi", type=int, default=300, help="DPI for PDF to PNG conversion")
     parser.add_argument(
         "--model",
@@ -141,19 +158,9 @@ def main():
     OUTPUT_DIR.mkdir(exist_ok=True)
 
     client = anthropic.Anthropic()
+    file_path = Path(args.file).resolve()
 
-    if args.files:
-        pdf_files = [Path(f).resolve() for f in args.files]
-    else:
-        pdf_files = sorted(INPUT_DIR.glob("*.pdf"))
-        if not pdf_files:
-            print(f"No PDFs found in {INPUT_DIR}/")
-            sys.exit(1)
-
-    for pdf_path in pdf_files:
-        process_pdf(client, pdf_path, args.dpi, args.model)
-
-    print(f"\nDone. Processed {len(pdf_files)} file(s).")
+    process_file(client, file_path, args.dpi, args.model)
 
 
 if __name__ == "__main__":
