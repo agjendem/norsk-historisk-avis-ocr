@@ -101,6 +101,32 @@ def _prompt_api_key():
     print("Saved to .env")
 
 
+MAX_IMAGE_BYTES = 5 * 1024 * 1024  # 5 MB API limit
+
+
+def _encode_image_under_limit(image, max_bytes=MAX_IMAGE_BYTES):
+    """Encode a PIL Image as grayscale JPEG, scaling down if needed to stay under max_bytes.
+
+    Returns (base64_str, media_type).
+    """
+    image = image.convert("L")  # grayscale — ideal for B&W scans, ~1/3 size
+    quality = 85
+    while True:
+        buf = io.BytesIO()
+        image.save(buf, format="JPEG", quality=quality)
+        data = buf.getvalue()
+        if len(data) <= max_bytes:
+            return base64.standard_b64encode(data).decode("utf-8"), "image/jpeg"
+        # Try lower quality first
+        if quality > 40:
+            quality -= 15
+            continue
+        # Quality alone isn't enough — scale down
+        w, h = image.size
+        image = image.resize((int(w * 0.75), int(h * 0.75)))
+        quality = 90  # reset quality after resize
+
+
 BEDROCK_MODEL_MAP = {
     "claude-sonnet-4-20250514": "us.anthropic.claude-sonnet-4-20250514-v1:0",
 }
@@ -110,7 +136,7 @@ class ClaudeVisionEngine:
     name = "claude-vision"
     output_suffix = ".vision.txt"
 
-    def __init__(self, dpi=300, model="claude-sonnet-4-20250514", region="eu-north-1"):
+    def __init__(self, dpi=150, model="claude-sonnet-4-20250514", region="eu-north-1"):
         self.dpi = dpi
         self.model = model
         self.region = region
@@ -176,6 +202,8 @@ class ClaudeVisionEngine:
             return
 
         if ext == ".pdf":
+            from PIL import Image
+
             print(f"  Converting PDF to image (DPI={self.dpi})...")
             images = convert_from_path(
                 str(file_path),
@@ -184,15 +212,18 @@ class ClaudeVisionEngine:
                 last_page=1,
                 poppler_path=_poppler_path,
             )
-            buf = io.BytesIO()
-            images[0].save(buf, format="PNG")
-            image_data = base64.standard_b64encode(buf.getvalue()).decode("utf-8")
-            media_type = "image/png"
+            image_data, media_type = _encode_image_under_limit(images[0])
         elif ext in MEDIA_TYPES:
-            media_type = MEDIA_TYPES[ext]
-            image_data = base64.standard_b64encode(
-                file_path.read_bytes()
-            ).decode("utf-8")
+            from PIL import Image
+
+            raw = file_path.read_bytes()
+            if len(raw) <= MAX_IMAGE_BYTES:
+                media_type = MEDIA_TYPES[ext]
+                image_data = base64.standard_b64encode(raw).decode("utf-8")
+            else:
+                image_data, media_type = _encode_image_under_limit(
+                    Image.open(file_path)
+                )
         else:
             print(f"Error: Unsupported file format '{ext}'", file=sys.stderr)
             return

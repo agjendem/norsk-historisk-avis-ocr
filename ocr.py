@@ -77,7 +77,7 @@ def main():
         choices=ENGINE_NAMES,
         help="OCR engine to use (interactive menu if omitted)",
     )
-    parser.add_argument("--dpi", type=int, default=300, help="DPI for PDF conversion")
+    parser.add_argument("--dpi", type=int, default=150, help="DPI for PDF conversion (default: 150)")
     parser.add_argument(
         "--model",
         default="claude-sonnet-4-20250514",
