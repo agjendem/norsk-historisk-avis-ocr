@@ -1,1 +1,2 @@
 anthropic[bedrock]==0.82.0
+truststore>=0.10.1
