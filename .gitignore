@@ -3,3 +3,6 @@
 .DS_Store
 input/
 output/
+vendor/
+__pycache__/
+*.pyc
