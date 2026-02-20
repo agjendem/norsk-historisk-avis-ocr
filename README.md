@@ -20,7 +20,7 @@ Local OCR using [Tesseract](https://github.com/tesseract-ocr/tesseract). Free, f
 - Requires `tesseract` and `poppler` installed on the system
 - Default language: Norwegian (`nor`)
 - Supports: PDF, PNG, JPG, JPEG, TIFF
-- Output: `output/{stem}/tesseract-{dpi}dpi/` with `header.txt` (if title detected), per-column files, and `combined.txt`
+- Output: `output/{stem}/tesseract-{dpi}dpi/` with `header.txt` (if title detected), per-column files, `combined.txt`, and `transcribed.txt` (reflowed flowing text with hyphenated words rejoined)
 
 ### claude-vision
 
@@ -29,7 +29,7 @@ Cloud OCR using the Anthropic Claude API. Sends the scanned page as an image to 
 - Requires an Anthropic API key or AWS credentials (see [Authentication](#authentication))
 - Requires `poppler` for PDF support
 - Supports: PDF, PNG, JPG, JPEG (not TIFF)
-- Output: `output/{stem}/vision-{dpi}dpi-{model}/` with `header.txt` (if title detected), per-column files, `combined.txt`, and `combined.corrected.txt`
+- Output: `output/{stem}/vision-{dpi}dpi-{model}/` with `header.txt` (if title detected), per-column files, `combined.txt`, `combined.corrected.txt`, and `transcribed.txt` (best available corrected output)
 - Images are sharpened, contrast-boosted, and compressed to JPEG to fit the 5 MB API limit
 - Token usage (input/output) is printed after each call
 - Automatic post-processing pass corrects common OCR errors using a second text-only Claude call
@@ -108,6 +108,7 @@ output/
       header.txt                      # title section OCR (if detected)
       column-1.txt .. column-N.txt   # per-column OCR
       combined.txt                    # concatenated result (title first)
+      transcribed.txt                 # reflowed flowing text (final output)
       page_annotated.png              # debug: column boundaries + title box
       title_crop.png                  # debug: title region crop (if detected)
       column_N_crop.png               # debug: column crops
@@ -117,6 +118,7 @@ output/
       column-1.txt .. column-N.txt
       combined.txt
       combined.corrected.txt          # post-processed OCR correction
+      transcribed.txt                 # best corrected output (final output)
       page_annotated.png
       title_crop.png                  # (if detected)
       column_N_crop.png

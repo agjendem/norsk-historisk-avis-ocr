@@ -454,6 +454,12 @@ class ClaudeVisionEngine:
             corrected_path.write_text(corrected + "\n", encoding="utf-8")
             print(green(f"  -> {corrected_path}"))
 
+        # Write best available output as transcribed.txt
+        best_text = corrected if corrected else combined_text
+        transcribed_path = sub_dir / "transcribed.txt"
+        transcribed_path.write_text(best_text + "\n", encoding="utf-8")
+        print(green(f"  -> {transcribed_path}"))
+
     def _correct_ocr(self, client, model, text):
         """Run a text-only correction pass on raw OCR output."""
         try:
