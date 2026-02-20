@@ -15,21 +15,21 @@ Place files in `input/`. Results are written to `output/`.
 
 ### tesseract
 
-Local OCR using [Tesseract](https://github.com/tesseract-ocr/tesseract). Free, fast, runs entirely offline. Pages are split into columns before OCR (same algorithm as Claude Vision) for better accuracy on multi-column layouts.
+Local OCR using [Tesseract](https://github.com/tesseract-ocr/tesseract). Free, fast, runs entirely offline. Pages are split into columns before OCR (same algorithm as Claude Vision) for better accuracy on multi-column layouts. Title sections that span multiple columns are detected automatically, extracted separately, and placed first in the output.
 
 - Requires `tesseract` and `poppler` installed on the system
 - Default language: Norwegian (`nor`)
 - Supports: PDF, PNG, JPG, JPEG, TIFF
-- Output: `output/{stem}/tesseract-{dpi}dpi/` with per-column files and `combined.txt`
+- Output: `output/{stem}/tesseract-{dpi}dpi/` with `header.txt` (if title detected), per-column files, and `combined.txt`
 
 ### claude-vision
 
-Cloud OCR using the Anthropic Claude API. Sends the scanned page as an image to Claude with a specialized prompt for column-aware newspaper transcription. Significantly better than Tesseract for historical scans with complex layouts.
+Cloud OCR using the Anthropic Claude API. Sends the scanned page as an image to Claude with a specialized prompt for column-aware newspaper transcription. Significantly better than Tesseract for historical scans with complex layouts. Title sections that span multiple columns are detected automatically, extracted separately, and placed first in the output.
 
 - Requires an Anthropic API key or AWS credentials (see [Authentication](#authentication))
 - Requires `poppler` for PDF support
 - Supports: PDF, PNG, JPG, JPEG (not TIFF)
-- Output: `output/{stem}/vision-{dpi}dpi-{model}/` with per-column files, `combined.txt`, and `combined.corrected.txt`
+- Output: `output/{stem}/vision-{dpi}dpi-{model}/` with `header.txt` (if title detected), per-column files, `combined.txt`, and `combined.corrected.txt`
 - Images are sharpened, contrast-boosted, and compressed to JPEG to fit the 5 MB API limit
 - Token usage (input/output) is printed after each call
 - Automatic post-processing pass corrects common OCR errors using a second text-only Claude call
@@ -105,16 +105,20 @@ Output is organized as `output/{stem}/{engine-config}/` so different engines and
 output/
   RB_1957_s5u/
     tesseract-300dpi/
+      header.txt                      # title section OCR (if detected)
       column-1.txt .. column-N.txt   # per-column OCR
-      combined.txt                    # concatenated result
-      page_annotated.png              # debug: column boundaries
+      combined.txt                    # concatenated result (title first)
+      page_annotated.png              # debug: column boundaries + title box
+      title_crop.png                  # debug: title region crop (if detected)
       column_N_crop.png               # debug: column crops
-      detection_info.txt              # debug: boundary positions
+      detection_info.txt              # debug: boundary positions + title info
     vision-300dpi-opus/
+      header.txt                      # title section OCR (if detected)
       column-1.txt .. column-N.txt
       combined.txt
       combined.corrected.txt          # post-processed OCR correction
       page_annotated.png
+      title_crop.png                  # (if detected)
       column_N_crop.png
       detection_info.txt
 ```
