@@ -42,7 +42,7 @@ def main():
     print(f"Image size: {page_image.size[0]} x {page_image.size[1]}")
 
     # Run column detection
-    from engines.claude_vision_engine import _split_columns
+    from engines._columns import _split_columns
 
     debug_dir = OUTPUT_DIR / f"{stem}_debug"
     debug_dir.mkdir(parents=True, exist_ok=True)
