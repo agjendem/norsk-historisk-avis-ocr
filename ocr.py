@@ -25,7 +25,7 @@ OUTPUT_DIR = PROJECT_DIR / "output"
 SUPPORTED_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg", ".tiff", ".tif"}
 
 
-def list_files(output_suffix):
+def list_files(output_dir_name):
     """List supported files in input/, marking processed ones with [done]."""
     files = sorted(
         f
@@ -42,8 +42,8 @@ def list_files(output_suffix):
     for i, f in enumerate(files, 1):
         stem = f.stem
         marker = ""
-        sub_dir = OUTPUT_DIR / stem
-        if (sub_dir / f"combined{output_suffix}").exists():
+        sub_dir = OUTPUT_DIR / stem / output_dir_name
+        if (sub_dir / "combined.txt").exists():
             marker = green(" [done]")
         print(f"  {i}) {f.name}{marker}")
     print("  q) Quit")
@@ -132,7 +132,7 @@ def main():
 
     # Interactive file picker loop
     while True:
-        files = list_files(engine.output_suffix)
+        files = list_files(engine.output_dir_name)
         if files is None:
             break
 

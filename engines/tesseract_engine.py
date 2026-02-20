@@ -27,6 +27,7 @@ class TesseractEngine:
         self.dpi = dpi
         self.lang = lang
         self.output_suffix = f".tesseract-{dpi}dpi.txt"
+        self.output_dir_name = f"tesseract-{dpi}dpi"
 
     def check_dependencies(self):
         """Return list of missing dependencies."""
@@ -77,9 +78,9 @@ class TesseractEngine:
             print(red(f"Error: Unsupported file format '{ext}'"))
             return
 
-        # Create sub-folder for this file
-        sub_dir = OUTPUT_DIR / stem
-        sub_dir.mkdir(exist_ok=True)
+        # Create sub-folder for this file: output/{stem}/{output_dir_name}/
+        sub_dir = OUTPUT_DIR / stem / self.output_dir_name
+        sub_dir.mkdir(parents=True, exist_ok=True)
 
         # Split into columns
         header_image, column_images = _split_columns(page_image, debug_dir=sub_dir)
@@ -99,6 +100,6 @@ class TesseractEngine:
 
         # Concatenate all sections into combined file
         combined_text = "\n\n".join(sections)
-        combined_path = sub_dir / f"combined{self.output_suffix}"
+        combined_path = sub_dir / "combined.txt"
         combined_path.write_text(combined_text + "\n", encoding="utf-8")
         print(green(f"  -> {combined_path}"))

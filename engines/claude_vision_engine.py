@@ -207,6 +207,7 @@ class ClaudeVisionEngine:
         self.max_tokens = max_tokens
         self._model_short = model.split("-")[1] if "-" in model else model
         self.output_suffix = f".vision-{dpi}dpi-{self._model_short}.txt"
+        self.output_dir_name = f"vision-{dpi}dpi-{self._model_short}"
 
     def _get_client(self):
         """Create an Anthropic client using the best available auth method.
@@ -389,9 +390,9 @@ class ClaudeVisionEngine:
             print(red(f"Error: Unsupported file format '{ext}'"), file=sys.stderr)
             return
 
-        # Create sub-folder for this file
-        sub_dir = OUTPUT_DIR / stem
-        sub_dir.mkdir(exist_ok=True)
+        # Create sub-folder for this file: output/{stem}/{output_dir_name}/
+        sub_dir = OUTPUT_DIR / stem / self.output_dir_name
+        sub_dir.mkdir(parents=True, exist_ok=True)
 
         # Split into columns (debug images saved alongside OCR output)
         header_image, column_images = _split_columns(page_image, debug_dir=sub_dir)
@@ -437,7 +438,7 @@ class ClaudeVisionEngine:
 
         # Concatenate all sections into combined file
         combined_text = "\n\n".join(text for _, text in sections)
-        combined_path = sub_dir / f"combined{self.output_suffix}"
+        combined_path = sub_dir / "combined.txt"
         combined_path.write_text(combined_text + "\n", encoding="utf-8")
         print(green(f"  -> {combined_path}"))
 
@@ -447,7 +448,7 @@ class ClaudeVisionEngine:
         ))
 
         # Post-processing: correct OCR errors via a second text-only pass
-        corrected_path = sub_dir / f"combined{self.output_suffix.replace('.txt', '.corrected.txt')}"
+        corrected_path = sub_dir / "combined.corrected.txt"
         corrected = self._correct_ocr(client, model, combined_text)
         if corrected:
             corrected_path.write_text(corrected + "\n", encoding="utf-8")
