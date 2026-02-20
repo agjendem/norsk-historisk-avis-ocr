@@ -4,7 +4,8 @@ import platform
 import shutil
 from pathlib import Path
 
-from engines._colors import green, red
+from engines._colors import green, yellow, red
+from engines._columns import _split_columns
 
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 OUTPUT_DIR = PROJECT_DIR / "output"
@@ -41,7 +42,7 @@ class TesseractEngine:
         return missing
 
     def process_file(self, file_path):
-        """Process a single file and write OCR output to output/."""
+        """Process a single file: split into columns, OCR each, and write output."""
         import pytesseract
         from pdf2image import convert_from_path
         from PIL import Image
@@ -55,11 +56,11 @@ class TesseractEngine:
         file_path = Path(file_path)
         ext = file_path.suffix.lower()
         stem = file_path.stem
-        txt_path = OUTPUT_DIR / f"{stem}{self.output_suffix}"
 
         OUTPUT_DIR.mkdir(exist_ok=True)
         print(f"Processing: {file_path}")
 
+        # Load the full page image
         if ext == ".pdf":
             print(f"  Converting PDF to image (DPI={self.dpi})...")
             images = convert_from_path(
@@ -69,13 +70,35 @@ class TesseractEngine:
                 last_page=1,
                 poppler_path=_poppler_path,
             )
-            text = pytesseract.image_to_string(images[0], lang=self.lang)
+            page_image = images[0]
         elif ext in IMAGE_EXTENSIONS:
-            img = Image.open(file_path)
-            text = pytesseract.image_to_string(img, lang=self.lang)
+            page_image = Image.open(file_path)
         else:
             print(red(f"Error: Unsupported file format '{ext}'"))
             return
 
-        txt_path.write_text(text, encoding="utf-8")
-        print(green(f"  -> {txt_path}"))
+        # Create sub-folder for this file
+        sub_dir = OUTPUT_DIR / stem
+        sub_dir.mkdir(exist_ok=True)
+
+        # Split into columns
+        header_image, column_images = _split_columns(page_image, debug_dir=sub_dir)
+        n_cols = len(column_images)
+        print(yellow(f"  Detected {n_cols} column{'s' if n_cols != 1 else ''}"))
+
+        sections = []
+
+        # OCR each column
+        for i, col_image in enumerate(column_images, 1):
+            print(f"  Column {i}/{n_cols}: running tesseract...")
+            text = pytesseract.image_to_string(col_image, lang=self.lang)
+            col_file = sub_dir / f"column-{i}.txt"
+            col_file.write_text(text, encoding="utf-8")
+            print(green(f"  -> {col_file}"))
+            sections.append(text)
+
+        # Concatenate all sections into combined file
+        combined_text = "\n\n".join(sections)
+        combined_path = sub_dir / f"combined{self.output_suffix}"
+        combined_path.write_text(combined_text + "\n", encoding="utf-8")
+        print(green(f"  -> {combined_path}"))
