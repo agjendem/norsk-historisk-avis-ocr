@@ -15,12 +15,12 @@ Place files in `input/`. Results are written to `output/`.
 
 ### tesseract
 
-Local OCR using [Tesseract](https://github.com/tesseract-ocr/tesseract). Free, fast, runs entirely offline. Reasonable for clean printed text but struggles with historical/degraded scans and complex column layouts.
+Local OCR using [Tesseract](https://github.com/tesseract-ocr/tesseract). Free, fast, runs entirely offline. Pages are split into columns before OCR (same algorithm as Claude Vision) for better accuracy on multi-column layouts.
 
 - Requires `tesseract` and `poppler` installed on the system
 - Default language: Norwegian (`nor`)
 - Supports: PDF, PNG, JPG, JPEG, TIFF
-- Output: `{filename}.tesseract-{dpi}dpi.txt`
+- Output: `output/{stem}/tesseract-{dpi}dpi/` with per-column files and `combined.txt`
 
 ### claude-vision
 
@@ -29,7 +29,7 @@ Cloud OCR using the Anthropic Claude API. Sends the scanned page as an image to 
 - Requires an Anthropic API key or AWS credentials (see [Authentication](#authentication))
 - Requires `poppler` for PDF support
 - Supports: PDF, PNG, JPG, JPEG (not TIFF)
-- Output: `{filename}.vision-{dpi}dpi-{model}.txt`
+- Output: `output/{stem}/vision-{dpi}dpi-{model}/` with per-column files, `combined.txt`, and `combined.corrected.txt`
 - Images are sharpened, contrast-boosted, and compressed to JPEG to fit the 5 MB API limit
 - Token usage (input/output) is printed after each call
 - Automatic post-processing pass corrects common OCR errors using a second text-only Claude call
@@ -99,13 +99,27 @@ The `--max-tokens` flag controls the output ceiling. It only affects cost if the
 
 ## Output files
 
-Output filenames encode the engine settings for easy comparison:
+Output is organized as `output/{stem}/{engine-config}/` so different engines and settings produce separate folders for side-by-side comparison:
 
-- Tesseract: `Filename.tesseract-300dpi.txt`
-- Claude Vision: `Filename.vision-300dpi-opus.txt` (raw OCR)
-- Claude Vision corrected: `Filename.vision-300dpi-opus.corrected.txt` (post-processed)
+```
+output/
+  RB_1957_s5u/
+    tesseract-300dpi/
+      column-1.txt .. column-N.txt   # per-column OCR
+      combined.txt                    # concatenated result
+      page_annotated.png              # debug: column boundaries
+      column_N_crop.png               # debug: column crops
+      detection_info.txt              # debug: boundary positions
+    vision-300dpi-opus/
+      column-1.txt .. column-N.txt
+      combined.txt
+      combined.corrected.txt          # post-processed OCR correction
+      page_annotated.png
+      column_N_crop.png
+      detection_info.txt
+```
 
-Re-running with different settings (e.g., `--dpi 150` or `--model claude-sonnet-4-20250514`) produces separate output files so you can compare results side by side.
+Re-running with different settings (e.g., `--dpi 150` or `--model claude-sonnet-4-20250514`) produces separate subfolders.
 
 ## Project structure
 
@@ -116,6 +130,7 @@ requirements.txt        # Shared Python dependencies
 engines/
   __init__.py           # Engine registry
   _colors.py            # ANSI color helpers
+  _columns.py           # Shared column splitting logic
   tesseract_engine.py   # Tesseract engine
   claude_vision_engine.py # Claude Vision engine
   tesseract-requirements.txt
