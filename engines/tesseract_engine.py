@@ -20,6 +20,16 @@ if platform.system() == "Windows":
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tiff", ".tif"}
 
 
+def _clean_divider_noise(text):
+    """Strip leading/trailing | characters from lines (column divider artifacts)."""
+    lines = text.split("\n")
+    cleaned = []
+    for line in lines:
+        line = line.strip("|")
+        cleaned.append(line)
+    return "\n".join(cleaned)
+
+
 class TesseractEngine:
     name = "tesseract"
 
@@ -93,6 +103,7 @@ class TesseractEngine:
         for i, col_image in enumerate(column_images, 1):
             print(f"  Column {i}/{n_cols}: running tesseract...")
             text = pytesseract.image_to_string(col_image, lang=self.lang)
+            text = _clean_divider_noise(text)
             col_file = sub_dir / f"column-{i}.txt"
             col_file.write_text(text, encoding="utf-8")
             print(green(f"  -> {col_file}"))
