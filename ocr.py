@@ -46,6 +46,7 @@ def list_files(output_dir_name):
         if (sub_dir / "combined.txt").exists():
             marker = green(" [done]")
         print(f"  {i}) {f.name}{marker}")
+    print("  n) Next unprocessed")
     print("  q) Quit")
     print()
 
@@ -136,11 +137,29 @@ def main():
         if files is None:
             break
 
-        selection = input(green(f"Select file [1-{len(files)} or q]: ")).strip()
+        selection = input(green(f"Select file [1-{len(files)}, n, or q]: ")).strip()
 
         if selection.lower() == "q":
             print("Bye.")
             break
+
+        if selection.lower() == "n":
+            # Find first unprocessed file
+            next_file = None
+            for f in files:
+                sub_dir = OUTPUT_DIR / f.stem / engine.output_dir_name
+                if not (sub_dir / "combined.txt").exists():
+                    next_file = f
+                    break
+            if next_file is None:
+                print(yellow("All files have been processed."))
+                continue
+            print()
+            try:
+                engine.process_file(next_file)
+            except Exception as e:
+                print(red(f"Error: {e}"), file=sys.stderr)
+            continue
 
         try:
             idx = int(selection) - 1
