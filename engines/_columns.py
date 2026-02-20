@@ -52,6 +52,123 @@ def _detect_header_boundary(gray_pixels, width, height, threshold=200):
     return 0
 
 
+def _detect_title_region(image, boundaries, threshold=200):
+    """Detect a title region at the top of the page that spans multiple columns.
+
+    After column boundaries are known, analyzes each column strip to find where
+    regular body text begins. Title regions are characterized by large vertical
+    gaps (>= large_gap_min px of blank rows) between lines of large-font text,
+    while body text is dense and continuous.
+
+    Args:
+        image: PIL Image of the full page (grayscale or RGB).
+        boundaries: Sorted list of column boundary x-coordinates (including 0
+            and width).
+        threshold: Grayscale value below which a pixel is considered dark.
+
+    Returns:
+        (title_image_or_none, body_top_per_column):
+        - title_image: Cropped PIL Image of the title region, or None if no
+          title detected.
+        - body_top_per_column: List of y-coordinates (one per column) where
+          body text begins. 0 for columns without a title region above them.
+    """
+    gray = image.convert("L")
+    width, height = gray.size
+    pixels = gray.load()
+    n_cols = len(boundaries) - 1
+
+    if n_cols < 2:
+        return None, [0] * max(n_cols, 1)
+
+    # Minimum run of blank rows to count as a "large gap" (title-like spacing).
+    # At 300 DPI, body text has ~0px gaps between lines, while title text has
+    # 40-80px gaps between large-font lines.
+    large_gap_min = 40
+    # Only scan the top portion of the page for title content
+    scan_limit = int(height * 0.40)
+    # A row is "blank" if fewer than 1% of its pixels are dark
+    blank_frac = 0.01
+
+    body_start_y = []
+
+    for col_idx in range(n_cols):
+        x_left = boundaries[col_idx]
+        x_right = boundaries[col_idx + 1]
+        col_width = x_right - x_left
+
+        if col_width < 30:
+            body_start_y.append(0)
+            continue
+
+        # Scan rows in the top region, find large gaps (runs of blank rows)
+        gap_start = None
+        last_large_gap_end = 0
+
+        for y in range(scan_limit):
+            count = 0
+            for x in range(x_left, x_right):
+                if pixels[x, y] < threshold:
+                    count += 1
+            is_blank = count < col_width * blank_frac
+
+            if is_blank:
+                if gap_start is None:
+                    gap_start = y
+            else:
+                if gap_start is not None:
+                    gap_len = y - gap_start
+                    if gap_len >= large_gap_min:
+                        last_large_gap_end = y
+                    gap_start = None
+
+        # body_start_y = row after the last large gap, or 0 if no large gaps
+        body_start_y.append(last_large_gap_end)
+
+    # Determine if there's a title region: columns with non-zero body_start_y
+    # have title-like content at the top.
+    # Require body_start_y > 5% of page height to filter noise.
+    min_title_height = int(height * 0.05)
+    elevated = [i for i in range(n_cols) if body_start_y[i] > min_title_height]
+
+    if not elevated:
+        return None, [0] * n_cols
+
+    # Group into contiguous runs of adjacent columns
+    groups = []
+    current_group = [elevated[0]]
+    for i in range(1, len(elevated)):
+        if elevated[i] == elevated[i - 1] + 1:
+            current_group.append(elevated[i])
+        else:
+            groups.append(current_group)
+            current_group = [elevated[i]]
+    groups.append(current_group)
+
+    # Pick the largest group (or leftmost if tied)
+    title_cols = max(groups, key=len)
+
+    if not title_cols:
+        return None, [0] * n_cols
+
+    # Title region: from top of page to the max body_start_y across title columns,
+    # spanning from left edge of first title column to right edge of last
+    title_bottom = max(body_start_y[c] for c in title_cols)
+    title_left = boundaries[title_cols[0]]
+    title_right = boundaries[title_cols[-1] + 1]
+
+    # Crop the title image
+    title_image = image.crop((title_left, 0, title_right, title_bottom))
+
+    # Build per-column body_top: title columns use their body_start_y,
+    # non-title columns use 0
+    body_top_per_col = [0] * n_cols
+    for c in title_cols:
+        body_top_per_col[c] = body_start_y[c]
+
+    return title_image, body_top_per_col
+
+
 def _find_gap_boundaries(gray_pixels, x_start, x_end, y_start, y_end,
                          expected_col_width, threshold=200, min_gap_px=8,
                          min_coverage=0.55):
@@ -134,12 +251,17 @@ def _find_gap_boundaries(gray_pixels, x_start, x_end, y_start, y_end,
     return boundaries
 
 
-def _save_debug_images(image, boundaries, debug_dir, body_top=0, overlap_px=0):
+def _save_debug_images(image, boundaries, debug_dir, body_top_per_col=None,
+                       overlap_px=0, title_image=None):
     """Save annotated page image, column crops, and detection info."""
     from PIL import Image, ImageDraw, ImageFont
 
     debug_dir.mkdir(parents=True, exist_ok=True)
     width, height = image.size
+    n_cols = len(boundaries) - 1
+
+    if body_top_per_col is None:
+        body_top_per_col = [0] * n_cols
 
     # Annotated full page
     annotated = image.copy()
@@ -147,6 +269,40 @@ def _save_debug_images(image, boundaries, debug_dir, body_top=0, overlap_px=0):
     for i, bx in enumerate(boundaries):
         if 0 < bx < width:
             draw.line([(bx, 0), (bx, height)], fill="blue", width=2)
+
+    # Draw title bounding box if detected (semi-transparent green fill + thick outline)
+    title_cols = []
+    if title_image is not None:
+        title_cols = [i for i in range(n_cols) if body_top_per_col[i] > 0]
+        if title_cols:
+            title_left = boundaries[title_cols[0]]
+            title_right = boundaries[title_cols[-1] + 1]
+            title_bottom = max(body_top_per_col[c] for c in title_cols)
+            # Green shaded overlay for title region
+            title_overlay = Image.new("RGBA", annotated.size, (0, 0, 0, 0))
+            title_overlay_draw = ImageDraw.Draw(title_overlay)
+            title_overlay_draw.rectangle(
+                [(title_left, 0), (title_right, title_bottom)],
+                fill=(0, 200, 0, 50),
+            )
+            annotated = Image.alpha_composite(annotated.convert("RGBA"), title_overlay)
+            annotated = annotated.convert("RGB")
+            draw = ImageDraw.Draw(annotated)
+            # Thick green outline
+            draw.rectangle(
+                [(title_left, 0), (title_right, title_bottom)],
+                outline=(0, 200, 0), width=5,
+            )
+            draw.text((title_left + 10, 8), "TITLE", fill=(0, 200, 0))
+
+    # Draw per-column body_top lines (thick dashed-style green)
+    for i in range(n_cols):
+        if body_top_per_col[i] > 0 and i not in title_cols:
+            left = boundaries[i]
+            right = boundaries[i + 1]
+            y = body_top_per_col[i]
+            draw.line([(left, y), (right, y)], fill=(0, 200, 0), width=4)
+
     # Draw overlap regions as semi-transparent red shading
     if overlap_px > 0:
         overlay = Image.new("RGBA", annotated.size, (0, 0, 0, 0))
@@ -163,37 +319,61 @@ def _save_debug_images(image, boundaries, debug_dir, body_top=0, overlap_px=0):
         annotated = annotated.convert("RGB")
     # Label columns
     draw = ImageDraw.Draw(annotated)
-    for i in range(len(boundaries) - 1):
+    for i in range(n_cols):
         cx = (boundaries[i] + boundaries[i + 1]) // 2
-        draw.text((cx - 10, 10), str(i + 1), fill="blue")
+        label_y = body_top_per_col[i] + 10 if body_top_per_col[i] > 0 else 10
+        draw.text((cx - 10, label_y), str(i + 1), fill="blue")
     annotated.save(debug_dir / "page_annotated.png")
 
+    # Save title crop if detected
+    if title_image is not None:
+        title_image.save(debug_dir / "title_crop.png")
+
     # Column crops (with overlap padding matching OCR crops)
-    for i in range(len(boundaries) - 1):
+    for i in range(n_cols):
         left = max(0, boundaries[i] - overlap_px)
         right = min(width, boundaries[i + 1] + overlap_px)
         if right - left < 30:
             continue
-        col_img = image.crop((left, body_top, right, height))
+        col_body_top = body_top_per_col[i] if i < len(body_top_per_col) else 0
+        col_img = image.crop((left, col_body_top, right, height))
         col_img.save(debug_dir / f"column_{i + 1}_crop.png")
 
     # Detection info
     info_lines = [
         f"Image size: {width} x {height}",
-        f"Body top: {body_top}",
         f"Overlap padding: {overlap_px}px",
         f"Boundaries: {boundaries}",
-        f"Columns: {len(boundaries) - 1}",
-        "",
+        f"Columns: {n_cols}",
     ]
-    for i in range(len(boundaries) - 1):
+
+    # Title detection info
+    if title_image is not None:
+        title_cols = [i for i in range(n_cols) if body_top_per_col[i] > 0]
+        title_bottom = max(body_top_per_col[c] for c in title_cols)
+        title_left = boundaries[title_cols[0]]
+        title_right = boundaries[title_cols[-1] + 1]
+        info_lines.append(
+            f"Title detected: columns {[c + 1 for c in title_cols]}, "
+            f"x={title_left}-{title_right}, y=0-{title_bottom}"
+        )
+        info_lines.append(f"Title crop size: {title_image.size[0]} x {title_image.size[1]}")
+    else:
+        info_lines.append("Title detected: none")
+
+    info_lines.append(f"Body top per column: {body_top_per_col}")
+    info_lines.append("")
+
+    for i in range(n_cols):
         w = boundaries[i + 1] - boundaries[i]
         pad_left = min(overlap_px, boundaries[i])
         pad_right = min(overlap_px, width - boundaries[i + 1])
         crop_w = w + pad_left + pad_right
+        col_body_top = body_top_per_col[i] if i < len(body_top_per_col) else 0
         info_lines.append(
             f"  Column {i + 1}: x={boundaries[i]}-{boundaries[i + 1]}, "
-            f"width={w}px, crop={crop_w}px (pad L={pad_left} R={pad_right})"
+            f"width={w}px, crop={crop_w}px (pad L={pad_left} R={pad_right}), "
+            f"body_top={col_body_top}"
         )
     (debug_dir / "detection_info.txt").write_text("\n".join(info_lines) + "\n", encoding="utf-8")
 
@@ -213,9 +393,10 @@ def _split_columns(image, debug_dir=None, overlap_px=20):
             crop. Compensates for non-linear scan distortion that shifts
             gutter positions across the page height. Default 20px.
 
-    Returns (None, [column_images]).
-    Header detection is not performed (headers that don't span full width
-    are handled fine by per-column OCR).
+    Returns (title_image_or_none, [column_images]).
+    Title detection finds large-font title regions spanning multiple columns
+    and excludes them from column crops. Column crops for title columns start
+    at the per-column body_start_y instead of 0.
     If only one column is detected, returns (None, [original_image]).
     """
     gray = image.convert("L")
@@ -278,26 +459,38 @@ def _split_columns(image, debug_dir=None, overlap_px=20):
     # Phase 3: merge, sort, and crop
     boundaries = sorted(all_boundaries)
 
-    # Crop column images, skipping narrow artifacts
-    columns = []
+    # Filter out narrow segments to get final boundaries
     final_boundaries = [boundaries[0]]
     for i in range(len(boundaries) - 1):
         left = boundaries[i]
         right = boundaries[i + 1]
         if right - left < 30:
             continue
+        final_boundaries.append(right)
+
+    # Detect title region using final column boundaries
+    title_image, body_top_per_col = _detect_title_region(
+        image, final_boundaries)
+
+    # Crop column images with per-column body_top
+    columns = []
+    n_cols = len(final_boundaries) - 1
+    for i in range(n_cols):
+        left = final_boundaries[i]
+        right = final_boundaries[i + 1]
         # Apply overlap padding, clamped to image bounds
         crop_left = max(0, left - overlap_px)
         crop_right = min(width, right + overlap_px)
-        col_img = image.crop((crop_left, body_top, crop_right, height))
+        col_body_top = body_top_per_col[i] if i < len(body_top_per_col) else 0
+        col_img = image.crop((crop_left, col_body_top, crop_right, height))
         columns.append(col_img)
-        final_boundaries.append(right)
 
     if debug_dir:
-        _save_debug_images(image, final_boundaries, debug_dir, body_top,
-                           overlap_px=overlap_px)
+        _save_debug_images(image, final_boundaries, debug_dir,
+                           body_top_per_col=body_top_per_col,
+                           overlap_px=overlap_px, title_image=title_image)
 
     if not columns:
         return (None, [image])
 
-    return (None, columns)
+    return (title_image, columns)

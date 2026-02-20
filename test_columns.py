@@ -49,12 +49,18 @@ def main():
 
     header, columns = _split_columns(page_image, debug_dir=debug_dir)
 
+    if header:
+        print(f"Title detected: {header.size[0]} x {header.size[1]}")
+    else:
+        print("Title detected: none")
     print(f"Columns detected: {len(columns)}")
     for i, col in enumerate(columns, 1):
         print(f"  Column {i}: {col.size[0]} x {col.size[1]}")
 
     print(f"\nDebug output saved to: {debug_dir}/")
     print(f"  page_annotated.png  — full page with boundary lines")
+    if header:
+        print(f"  title_crop.png      — detected title region")
     print(f"  column_N_crop.png   — individual column crops")
     print(f"  detection_info.txt  — boundary positions and widths")
 

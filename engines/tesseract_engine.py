@@ -99,6 +99,16 @@ class TesseractEngine:
 
         sections = []
 
+        # OCR header if present
+        if header_image:
+            print(f"  Header: running tesseract...")
+            text = pytesseract.image_to_string(header_image, lang=self.lang)
+            text = _clean_divider_noise(text)
+            header_file = sub_dir / "header.txt"
+            header_file.write_text(text, encoding="utf-8")
+            print(green(f"  -> {header_file}"))
+            sections.append(text)
+
         # OCR each column
         for i, col_image in enumerate(column_images, 1):
             print(f"  Column {i}/{n_cols}: running tesseract...")
