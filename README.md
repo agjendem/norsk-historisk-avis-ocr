@@ -22,6 +22,15 @@ Local OCR using [Tesseract](https://github.com/tesseract-ocr/tesseract). Free, f
 - Supports: PDF, PNG, JPG, JPEG, TIFF
 - Output: `output/{stem}/tesseract-{dpi}dpi/` with `header.txt` (if title detected), per-column files, `combined.txt`, and `transcribed.txt` (reflowed flowing text with hyphenated words rejoined)
 
+### tesseract+claude
+
+Hybrid engine: runs Tesseract OCR locally, then sends the reflowed text to Claude for intelligent error correction. Gets most of the accuracy benefit of Claude Vision at a fraction of the cost (text-only API call, no image tokens). Title sections are handled the same way as the other engines.
+
+- Requires `tesseract`, `poppler`, and Claude credentials (see [Authentication](#authentication))
+- Default language: Norwegian (`nor`)
+- Supports: PDF, PNG, JPG, JPEG, TIFF
+- Output: `output/{stem}/tesseract+claude-{dpi}dpi-{model}/` with `header.txt` (if title detected), per-column files, `combined.txt`, `transcribed-pre-claude.txt` (reflowed tesseract output before correction), `transcribed.txt` (corrected output), and `correction-changes.txt` (human-readable diff of Claude's edits)
+
 ### claude-vision
 
 Cloud OCR using the Anthropic Claude API. Sends the scanned page as an image to Claude with a specialized prompt for column-aware newspaper transcription. Significantly better than Tesseract for historical scans with complex layouts. Title sections that span multiple columns are detected automatically, extracted separately, and placed first in the output.
@@ -36,7 +45,7 @@ Cloud OCR using the Anthropic Claude API. Sends the scanned page as an image to 
 
 ## Authentication
 
-The claude-vision engine auto-detects credentials in this order:
+The `claude-vision` and `tesseract+claude` engines auto-detect credentials in this order:
 
 1. **`ANTHROPIC_API_KEY`** in environment or `.env` file -- uses the direct Anthropic API
 2. **AWS credentials** (`AWS_PROFILE`, `AWS_ACCESS_KEY_ID`, or boto3 default session) -- uses AWS Bedrock
@@ -56,11 +65,11 @@ python ocr.py [engine] [options]
 
 | Argument | Default | Description |
 |---|---|---|
-| `engine` | _(interactive)_ | `tesseract` or `claude-vision` |
+| `engine` | _(interactive)_ | `tesseract`, `tesseract+claude`, or `claude-vision` |
 | `--dpi` | `300` | DPI for PDF-to-image conversion |
-| `--model` | `claude-opus-4-20250514` | Claude model ID (claude-vision only) |
-| `--max-tokens` | `16384` | Max output tokens (claude-vision only) |
-| `--region` | `eu-north-1` | AWS Bedrock region (claude-vision only) |
+| `--model` | `claude-opus-4-20250514` | Claude model ID (`claude-vision` and `tesseract+claude`) |
+| `--max-tokens` | `16384` | Max output tokens (`claude-vision` and `tesseract+claude`) |
+| `--region` | `eu-north-1` | AWS Bedrock region (`claude-vision` and `tesseract+claude`) |
 
 ### Examples
 
@@ -82,6 +91,12 @@ python ocr.py [engine] [options]
 
 # Use Bedrock in us-east-1
 .venv/bin/python ocr.py claude-vision --region us-east-1
+
+# Tesseract OCR + Claude correction (cheaper than full Claude Vision)
+.venv/bin/python ocr.py tesseract+claude
+
+# Tesseract+Claude with Sonnet for correction
+.venv/bin/python ocr.py tesseract+claude --model claude-sonnet-4-20250514
 ```
 
 ## Model choices and cost
@@ -113,6 +128,17 @@ output/
       title_crop.png                  # debug: title region crop (if detected)
       column_N_crop.png               # debug: column crops
       detection_info.txt              # debug: boundary positions + title info
+    tesseract+claude-300dpi-opus/
+      header.txt                      # title section OCR (if detected)
+      column-1.txt .. column-N.txt
+      combined.txt
+      transcribed-pre-claude.txt      # reflowed tesseract output (before correction)
+      transcribed.txt                 # Claude-corrected output (final output)
+      correction-changes.txt          # human-readable diff of Claude's edits
+      page_annotated.png
+      title_crop.png                  # (if detected)
+      column_N_crop.png
+      detection_info.txt
     vision-300dpi-opus/
       header.txt                      # title section OCR (if detected)
       column-1.txt .. column-N.txt
@@ -137,7 +163,9 @@ engines/
   __init__.py           # Engine registry
   _colors.py            # ANSI color helpers
   _columns.py           # Shared column splitting logic
+  _correction.py        # Shared Claude correction logic (prompts, auth, client)
   tesseract_engine.py   # Tesseract engine
+  tesseract_claude_engine.py # Tesseract+Claude hybrid engine
   claude_vision_engine.py # Claude Vision engine
   tesseract-requirements.txt
   claude-vision-requirements.txt
