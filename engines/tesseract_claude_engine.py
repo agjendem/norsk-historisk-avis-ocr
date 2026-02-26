@@ -85,23 +85,31 @@ class TesseractClaudeEngine(TesseractEngine):
         # Run tesseract pipeline (columns, OCR, combined.txt) but skip transcribed.txt
         super().process_file(file_path, _skip_transcribed=True)
 
-        # Reflow and write pre-correction version
+        # Reflow each column/header file individually (matches tesseract engine behavior)
         stem = Path(file_path).stem
         sub_dir = Path(__file__).resolve().parent.parent / "output" / stem / self.output_dir_name
-        combined_path = sub_dir / "combined.txt"
-        if not combined_path.exists():
-            print(red("  No combined.txt found — skipping correction."))
+
+        sections = []
+        header_path = sub_dir / "header.txt"
+        if header_path.exists():
+            sections.append(header_path.read_text(encoding="utf-8"))
+        col_num = 1
+        while True:
+            col_path = sub_dir / f"column-{col_num}.txt"
+            if not col_path.exists():
+                break
+            sections.append(col_path.read_text(encoding="utf-8"))
+            col_num += 1
+
+        if not sections:
+            print(red("  No column files found — skipping correction."))
             return
 
-        combined_text = combined_path.read_text(encoding="utf-8").strip()
-        if not combined_text:
-            print(yellow("  combined.txt is empty — skipping correction."))
-            return
-
-        # Reflow each section (split on double newlines matching combined.txt format)
-        sections = combined_text.split("\n\n")
         reflowed_sections = [_reflow_text(s) for s in sections]
         reflowed_text = "\n\n".join(s for s in reflowed_sections if s)
+        if not reflowed_text:
+            print(yellow("  All columns empty — skipping correction."))
+            return
 
         transcribed_path = sub_dir / "transcribed.txt"
         pre_claude_path = sub_dir / "transcribed-pre-claude.txt"
