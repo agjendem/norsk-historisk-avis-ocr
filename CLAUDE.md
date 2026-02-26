@@ -4,15 +4,17 @@ See [README.md](README.md) for full project documentation.
 
 ## Architecture
 
-- `ocr.py` is the CLI entry point. Engine-specific args (`--model`, `--max-tokens`, `--region`) are only passed when `engine_name == "claude-vision"`.
+- `ocr.py` is the CLI entry point. Engine-specific args (`--model`, `--max-tokens`, `--region`) are only passed when `engine_name in ("claude-vision", "tesseract+claude")`.
 - Engines live in `engines/` and follow a common interface: `__init__(**kwargs)`, `check_dependencies()`, `process_file(path)`, `output_suffix`, `output_dir_name`.
-- Column splitting logic lives in `engines/_columns.py` and is shared by both engines. Both engines split pages into columns before OCR.
+- Three engines: `tesseract` (local OCR), `claude-vision` (Claude API for OCR + correction), `tesseract+claude` (tesseract OCR + Claude correction). The `tesseract+claude` engine subclasses `TesseractEngine` and adds a Claude correction pass.
+- Column splitting logic lives in `engines/_columns.py` and is shared by all engines. All engines split pages into columns before OCR.
+- Shared Claude correction logic (prompts, auth, client creation, `correct_ocr()`) lives in `engines/_correction.py` and is used by both `claude-vision` and `tesseract+claude` engines.
 - Engine imports are lazy (deferred in `engines/__init__.py`) so `--help` and setup work without dependencies installed.
 - The `truststore` import at the top of `claude_vision_engine.py` must stay before any `anthropic` imports to inject OS trust store for SSL.
 
 ## Authentication flow
 
-Claude-vision auth priority: `ANTHROPIC_API_KEY` > AWS credentials (Bedrock) > interactive prompt. See `_get_client()` in `claude_vision_engine.py`. When using Bedrock, model IDs are mapped via `BEDROCK_MODEL_MAP`.
+Claude auth priority: `ANTHROPIC_API_KEY` > AWS credentials (Bedrock) > interactive prompt. See `get_claude_client()` in `engines/_correction.py`. When using Bedrock, model IDs are mapped via `BEDROCK_MODEL_MAP`.
 
 ## Image processing pipeline
 
@@ -27,7 +29,7 @@ For Claude Vision specifically, column images additionally go through: sharpen +
 - Claude API has a 5 MB image size limit on **decoded** bytes (not the base64 string). Base64 inflates by ~33%, but the API decodes before checking. All size comparisons in the code use raw byte length to match. Two paths: `_encode_image_under_limit()` loops until under the limit (PDFs, oversized images); small image files are passed through as-is after a raw size check.
 - Opus with high `max_tokens` requires the streaming API (`client.messages.stream()`).
 - TIFF files are not supported by the Claude API. Only tesseract handles TIFF.
-- Output is written to `output/{stem}/{output_dir_name}/` (e.g. `output/s5u/vision-300dpi-opus/`). Each engine/config combination gets its own subfolder for side-by-side comparison. If a title is detected, `header.txt` contains the title text. Per-column files are `column-N.txt`, concatenated result is `combined.txt` (title first, then columns). Both engines write `transcribed.txt` as the final best output: tesseract's version is reflowed (hyphenated words rejoined, line breaks collapsed to spaces, paragraph breaks preserved via `_reflow_text()`); claude-vision's is the corrected LLM output (or raw combined if correction failed).
+- Output is written to `output/{stem}/{output_dir_name}/` (e.g. `output/s5u/vision-300dpi-opus/`). Each engine/config combination gets its own subfolder for side-by-side comparison. If a title is detected, `header.txt` contains the title text. Per-column files are `column-N.txt`, concatenated result is `combined.txt` (title first, then columns). All engines write `transcribed.txt` as the final best output: tesseract's version is reflowed (hyphenated words rejoined, line breaks collapsed to spaces, paragraph breaks preserved via `_reflow_text()`); claude-vision's and tesseract+claude's is the corrected LLM output (or raw combined/reflowed if correction failed). The tesseract+claude engine also writes `combined.corrected.txt`.
 
 ## OCR prompt tuning
 

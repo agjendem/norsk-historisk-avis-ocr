@@ -72,7 +72,7 @@ def select_engine():
 def main():
     parser = argparse.ArgumentParser(
         description="Cross-platform OCR CLI",
-        epilog="Engines: tesseract, claude-vision",
+        epilog="Engines: tesseract, claude-vision, tesseract+claude",
     )
     parser.add_argument(
         "engine",
@@ -108,7 +108,7 @@ def main():
 
     # Build engine with applicable kwargs
     kwargs = {"dpi": args.dpi}
-    if engine_name == "claude-vision":
+    if engine_name in ("claude-vision", "tesseract+claude"):
         kwargs["model"] = args.model
         kwargs["max_tokens"] = args.max_tokens
         kwargs["region"] = args.region

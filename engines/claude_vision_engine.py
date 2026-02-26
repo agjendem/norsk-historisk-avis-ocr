@@ -1,9 +1,7 @@
 """Claude Vision OCR engine — cross-platform wrapper using anthropic SDK and pdf2image."""
 
 import base64
-import getpass
 import io
-import os
 import platform
 import shutil
 import sys
@@ -11,6 +9,15 @@ from pathlib import Path
 
 from engines._colors import green, yellow, red, Spinner
 from engines._columns import _split_columns
+from engines._correction import (
+    BEDROCK_MODEL_MAP,
+    _has_anthropic_api_key,
+    _has_aws_credentials,
+    _prompt_api_key,
+    get_claude_client,
+    resolve_model,
+    correct_ocr,
+)
 
 try:
     import truststore
@@ -66,34 +73,6 @@ and/or author byline. Output clean text preserving the heading structure. \
 Do not skip or summarize any content.\
 """
 
-CORRECTION_SYSTEM_PROMPT = """\
-You are an expert proofreader specializing in historical Norwegian text. \
-You are given raw OCR output from a 1950s Norwegian newspaper scan. The OCR \
-contains errors from misread characters, especially in fraktur/antiqua typefaces.
-
-Your task is to correct obvious OCR errors while preserving the original text \
-as faithfully as possible.
-
-Rules:
-- Fix clear character-level OCR errors (e.g. rn\u2192m, li\u2192h, cl\u2192d, \
-\u00f8\u2192o, \u00e6\u2192ae confusions, doubled/missing letters).
-- Fix garbled words where the correct Norwegian word is obvious from context.
-- Preserve the original paragraph structure, line breaks, and formatting exactly.
-- Preserve \u00ab\u00bb quotes, headings, and verse formatting.
-- Do NOT rewrite, modernize spelling, or rephrase. Keep the 1950s Norwegian \
-orthography (e.g. \u00abbleven\u00bb not \u00abblitt\u00bb, \u00abhvad\u00bb not \u00abhva\u00bb).
-- If a word is ambiguous and you cannot determine the correct reading, leave it \
-as-is with [?] after it.
-- Do NOT add commentary or notes. Output only the corrected text.
-- NEVER remove or summarize content. The output must have the same amount of \
-text as the input.\
-"""
-
-CORRECTION_USER_PROMPT = """\
-Correct OCR errors in the following text from a 1950s Norwegian newspaper. \
-Fix only clear misreadings. Preserve original spelling and structure.\n\n{text}\
-"""
-
 MEDIA_TYPES = {
     ".png": "image/png",
     ".jpg": "image/jpeg",
@@ -108,49 +87,6 @@ if platform.system() == "Windows":
     _win_poppler = PROJECT_DIR / "vendor" / "poppler" / "Library" / "bin"
     if _win_poppler.exists():
         _poppler_path = str(_win_poppler)
-
-
-def _load_dotenv():
-    from dotenv import load_dotenv
-    env_file = PROJECT_DIR / ".env"
-    if env_file.exists():
-        load_dotenv(env_file)
-
-
-def _has_anthropic_api_key():
-    """Return True if ANTHROPIC_API_KEY is available in env or .env file."""
-    if os.environ.get("ANTHROPIC_API_KEY"):
-        return True
-    _load_dotenv()
-    return bool(os.environ.get("ANTHROPIC_API_KEY"))
-
-
-def _has_aws_credentials():
-    """Return True if AWS credentials are available (profile, env vars, or default session)."""
-    if os.environ.get("AWS_PROFILE") or os.environ.get("AWS_ACCESS_KEY_ID"):
-        return True
-    try:
-        import boto3
-        session = boto3.Session()
-        credentials = session.get_credentials()
-        return credentials is not None
-    except Exception:
-        return False
-
-
-def _prompt_api_key():
-    """Prompt for Anthropic API key and save to .env."""
-    print(yellow("No ANTHROPIC_API_KEY found in environment or .env file."))
-    print(yellow("No AWS credentials detected for Bedrock."))
-    key = getpass.getpass("Enter your Anthropic API key: ").strip()
-    if not key:
-        print(red("Error: API key is required for claude-vision."), file=sys.stderr)
-        sys.exit(1)
-
-    env_file = PROJECT_DIR / ".env"
-    env_file.write_text(f"ANTHROPIC_API_KEY={key}\n", encoding="utf-8")
-    os.environ["ANTHROPIC_API_KEY"] = key
-    print("Saved to .env")
 
 
 # Claude API limit is 5 MB on the decoded image bytes (not the base64 string).
@@ -191,12 +127,6 @@ def _encode_image_under_limit(image, max_bytes=MAX_IMAGE_BYTES):
         quality = 95  # reset quality after resize
 
 
-BEDROCK_MODEL_MAP = {
-    "claude-sonnet-4-20250514": "us.anthropic.claude-sonnet-4-20250514-v1:0",
-    "claude-opus-4-20250514": "us.anthropic.claude-opus-4-20250514-v1:0",
-}
-
-
 class ClaudeVisionEngine:
     name = "claude-vision"
 
@@ -210,34 +140,12 @@ class ClaudeVisionEngine:
         self.output_dir_name = f"vision-{dpi}dpi-{self._model_short}"
 
     def _get_client(self):
-        """Create an Anthropic client using the best available auth method.
-
-        Priority:
-        1. ANTHROPIC_API_KEY → direct Anthropic API
-        2. AWS credentials → Bedrock
-        3. Prompt for API key → direct Anthropic API
-        """
-        import anthropic
-
-        if _has_anthropic_api_key():
-            print(yellow("  Auth: using Anthropic API key"))
-            return anthropic.Anthropic()
-
-        if _has_aws_credentials():
-            print(yellow(f"  Auth: using AWS Bedrock (region={self.region})"))
-            return anthropic.AnthropicBedrock(aws_region=self.region)
-
-        _prompt_api_key()
-        print(yellow("  Auth: using Anthropic API key"))
-        return anthropic.Anthropic()
+        """Create an Anthropic client using the best available auth method."""
+        return get_claude_client(self.region)
 
     def _resolve_model(self, client):
         """Return the model ID appropriate for the client type."""
-        import anthropic
-
-        if isinstance(client, anthropic.AnthropicBedrock):
-            return BEDROCK_MODEL_MAP.get(self.model, self.model)
-        return self.model
+        return resolve_model(client, self.model)
 
     def check_dependencies(self):
         """Return list of missing dependencies (hard blockers only)."""
@@ -311,7 +219,7 @@ class ClaudeVisionEngine:
 
         if isinstance(exc, anthropic.AuthenticationError):
             print(red(
-                "Error: Authentication failed — your API key is invalid or expired."
+                "Error: Authentication failed \u2014 your API key is invalid or expired."
             ), file=sys.stderr)
             print(red(
                 "  Get a key at: https://platform.claude.com/settings/keys"
@@ -319,10 +227,10 @@ class ClaudeVisionEngine:
             env_file = PROJECT_DIR / ".env"
             if env_file.exists():
                 env_file.unlink()
-                print(red("  (Removed .env — you will be prompted for a new key next run)"))
+                print(red("  (Removed .env \u2014 you will be prompted for a new key next run)"))
         elif isinstance(exc, anthropic.PermissionDeniedError):
             print(red(
-                "Error: Permission denied — your credentials lack access to this model."
+                "Error: Permission denied \u2014 your credentials lack access to this model."
             ), file=sys.stderr)
             if isinstance(client, anthropic.AnthropicBedrock):
                 print(red(
@@ -346,7 +254,7 @@ class ClaudeVisionEngine:
                 ), file=sys.stderr)
         elif isinstance(exc, anthropic.APIStatusError):
             print(red(
-                f"Error: API returned {exc.status_code} — {exc.message}"
+                f"Error: API returned {exc.status_code} \u2014 {exc.message}"
             ), file=sys.stderr)
         else:
             raise
@@ -449,7 +357,7 @@ class ClaudeVisionEngine:
 
         # Post-processing: correct OCR errors via a second text-only pass
         corrected_path = sub_dir / "combined.corrected.txt"
-        corrected = self._correct_ocr(client, model, combined_text)
+        corrected = correct_ocr(client, model, self.max_tokens, combined_text)
         if corrected:
             corrected_path.write_text(corrected + "\n", encoding="utf-8")
             print(green(f"  -> {corrected_path}"))
@@ -459,44 +367,3 @@ class ClaudeVisionEngine:
         transcribed_path = sub_dir / "transcribed.txt"
         transcribed_path.write_text(best_text + "\n", encoding="utf-8")
         print(green(f"  -> {transcribed_path}"))
-
-    def _correct_ocr(self, client, model, text):
-        """Run a text-only correction pass on raw OCR output."""
-        try:
-            with Spinner("Correcting OCR errors") as spinner, \
-                 client.messages.stream(
-                    model=model,
-                    max_tokens=self.max_tokens,
-                    temperature=0,
-                    system=CORRECTION_SYSTEM_PROMPT,
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": CORRECTION_USER_PROMPT.format(text=text),
-                        }
-                    ],
-                 ) as stream:
-                token_count = 0
-                for chunk in stream.text_stream:
-                    token_count += 1
-                    if token_count % 20 == 0:
-                        spinner.update(f"~{token_count} tokens")
-                message = stream.get_final_message()
-            elapsed = spinner.elapsed
-
-            usage = message.usage
-            stop = message.stop_reason
-            status = "complete" if stop == "end_turn" else "truncated"
-            print(yellow(
-                f"  {status.capitalize()} in {elapsed:.1f}s"
-                f"  ({usage.input_tokens} in / {usage.output_tokens} out)"
-            ))
-            if stop == "max_tokens":
-                print(yellow(
-                    f"  Warning: correction was truncated at {self.max_tokens} tokens."
-                    " Re-run with a higher --max-tokens value."
-                ))
-            return message.content[0].text
-        except Exception as exc:
-            print(red(f"  Correction pass failed: {exc}"), file=sys.stderr)
-            return None
