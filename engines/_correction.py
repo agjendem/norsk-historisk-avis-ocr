@@ -27,9 +27,9 @@ Rules:
 orthography (e.g. \u00abbleven\u00bb not \u00abblitt\u00bb, \u00abhvad\u00bb not \u00abhva\u00bb).
 - If a word is ambiguous and you cannot determine the correct reading, leave it \
 as-is with [?] after it.
-- Do NOT add commentary or notes. Output only the corrected text.
-- NEVER remove or summarize content. The output must have the same amount of \
-text as the input.\
+- NEVER delete or remove words. Every word in the input must appear in the output. \
+If a word looks wrong but you are unsure of the correction, leave it exactly as-is.
+- Do NOT add commentary or notes. Output only the corrected text.\
 """
 
 CORRECTION_USER_PROMPT = """\
