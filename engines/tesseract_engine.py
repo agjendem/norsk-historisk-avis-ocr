@@ -110,7 +110,7 @@ class TesseractEngine:
             missing.append("poppler (provides pdftoppm for PDF conversion)")
         return missing
 
-    def process_file(self, file_path):
+    def process_file(self, file_path, _skip_transcribed=False):
         """Process a single file: split into columns, OCR each, and write output."""
         import pytesseract
         from pdf2image import convert_from_path
@@ -184,8 +184,9 @@ class TesseractEngine:
         print(green(f"  -> {combined_path}"))
 
         # Write flowing text output (reflow each section independently)
-        reflowed_sections = [_reflow_text(s) for s in sections]
-        transcribed_text = "\n\n".join(s for s in reflowed_sections if s)
-        transcribed_path = sub_dir / "transcribed.txt"
-        transcribed_path.write_text(transcribed_text + "\n", encoding="utf-8")
-        print(green(f"  -> {transcribed_path}"))
+        if not _skip_transcribed:
+            reflowed_sections = [_reflow_text(s) for s in sections]
+            transcribed_text = "\n\n".join(s for s in reflowed_sections if s)
+            transcribed_path = sub_dir / "transcribed.txt"
+            transcribed_path.write_text(transcribed_text + "\n", encoding="utf-8")
+            print(green(f"  -> {transcribed_path}"))

@@ -1,5 +1,7 @@
 """Tesseract+Claude hybrid engine — tesseract OCR with Claude text correction."""
 
+import difflib
+
 from engines._colors import green, yellow, red
 from engines._correction import (
     has_claude_auth,
@@ -8,6 +10,51 @@ from engines._correction import (
     correct_ocr,
 )
 from engines.tesseract_engine import TesseractEngine
+
+
+def _readable_diff(before, after):
+    """Generate a human-readable list of changes between two texts.
+
+    Shows each change with a few words of surrounding context, formatted as:
+        ...context «old» → «new» context...
+    """
+    before_words = before.split()
+    after_words = after.split()
+
+    sm = difflib.SequenceMatcher(None, before_words, after_words)
+    changes = []
+    CONTEXT = 3  # words of context on each side
+
+    for op, i1, i2, j1, j2 in sm.get_opcodes():
+        if op == "equal":
+            continue
+
+        # Surrounding context from the "before" side
+        ctx_before = before_words[max(0, i1 - CONTEXT):i1]
+        ctx_after = before_words[i2:i2 + CONTEXT]
+
+        old = " ".join(before_words[i1:i2]) if i1 < i2 else ""
+        new = " ".join(after_words[j1:j2]) if j1 < j2 else ""
+
+        parts = []
+        if ctx_before:
+            parts.append("..." + " ".join(ctx_before))
+        if op == "replace":
+            parts.append(f"\u00ab{old}\u00bb \u2192 \u00ab{new}\u00bb")
+        elif op == "delete":
+            parts.append(f"\u00ab{old}\u00bb \u2192 (deleted)")
+        elif op == "insert":
+            parts.append(f"(inserted) \u00ab{new}\u00bb")
+        if ctx_after:
+            parts.append(" ".join(ctx_after) + "...")
+
+        changes.append(" ".join(parts))
+
+    if not changes:
+        return "No changes detected."
+
+    header = f"Claude correction changes ({len(changes)} edits):\n"
+    return header + "\n".join(f"  {i+1}. {c}" for i, c in enumerate(changes))
 
 
 class TesseractClaudeEngine(TesseractEngine):
@@ -31,12 +78,14 @@ class TesseractClaudeEngine(TesseractEngine):
         return missing
 
     def process_file(self, file_path):
-        """Run tesseract OCR, then correct the output with Claude."""
-        # Run the full tesseract pipeline (columns, OCR, combined.txt, transcribed.txt)
-        super().process_file(file_path)
-
-        # Read the combined tesseract output
+        """Run tesseract OCR, then correct the reflowed output with Claude."""
         from pathlib import Path
+        from engines.tesseract_engine import _reflow_text
+
+        # Run tesseract pipeline (columns, OCR, combined.txt) but skip transcribed.txt
+        super().process_file(file_path, _skip_transcribed=True)
+
+        # Reflow and write pre-correction version
         stem = Path(file_path).stem
         sub_dir = Path(__file__).resolve().parent.parent / "output" / stem / self.output_dir_name
         combined_path = sub_dir / "combined.txt"
@@ -49,19 +98,31 @@ class TesseractClaudeEngine(TesseractEngine):
             print(yellow("  combined.txt is empty — skipping correction."))
             return
 
-        # Set up Claude client and run correction
+        # Reflow each section (split on double newlines matching combined.txt format)
+        sections = combined_text.split("\n\n")
+        reflowed_sections = [_reflow_text(s) for s in sections]
+        reflowed_text = "\n\n".join(s for s in reflowed_sections if s)
+
+        pre_claude_path = sub_dir / "transcribed-pre-claude.txt"
+        pre_claude_path.write_text(reflowed_text + "\n", encoding="utf-8")
+        print(green(f"  -> {pre_claude_path}"))
+
+        # Set up Claude client and run correction on the reflowed text
         client = get_claude_client(self.region)
         model = resolve_model(client, self.model)
+        corrected = correct_ocr(client, model, self.max_tokens, reflowed_text)
 
-        corrected = correct_ocr(client, model, self.max_tokens, combined_text)
-
-        corrected_path = sub_dir / "combined.corrected.txt"
         if corrected:
-            corrected_path.write_text(corrected + "\n", encoding="utf-8")
-            print(green(f"  -> {corrected_path}"))
+            transcribed_path.write_text(corrected + "\n", encoding="utf-8")
+            print(green(f"  -> {transcribed_path}"))
 
-        # Overwrite transcribed.txt with corrected output (or keep reflowed version)
-        best_text = corrected if corrected else combined_text
-        transcribed_path = sub_dir / "transcribed.txt"
-        transcribed_path.write_text(best_text + "\n", encoding="utf-8")
-        print(green(f"  -> {transcribed_path} (corrected)"))
+            # Write human-readable diff of what Claude changed
+            changes_path = sub_dir / "correction-changes.txt"
+            changes_path.write_text(
+                _readable_diff(reflowed_text, corrected) + "\n", encoding="utf-8"
+            )
+            print(green(f"  -> {changes_path}"))
+        else:
+            # Correction failed — restore reflowed version as transcribed.txt
+            pre_claude_path.rename(transcribed_path)
+            print(yellow("  Correction failed — keeping reflowed output."))
