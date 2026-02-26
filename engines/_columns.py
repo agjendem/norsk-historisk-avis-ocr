@@ -1,57 +1,6 @@
 """Shared column splitting logic for multi-column newspaper page images."""
 
 
-def _detect_header_boundary(gray_pixels, width, height, threshold=200):
-    """Find the y-coordinate where newspaper columns begin.
-
-    Scans rows top-down looking for the first row where the vertical projection
-    shows multiple distinct text regions separated by gaps — indicating the
-    start of multi-column layout.
-
-    Returns the y-coordinate of the column start, or 0 if no header detected.
-    """
-    # Minimum gap width (px) to count as a column separator
-    min_gap = 15
-    # Minimum number of column regions to consider it "multi-column"
-    min_columns = 2
-    # Scan in bands of rows to smooth out noise
-    band_height = 20
-
-    for y_start in range(0, height - band_height, band_height):
-        y_end = min(y_start + band_height, height)
-        # Count dark pixels per x-coordinate in this band
-        x_dark = [0] * width
-        for y in range(y_start, y_end):
-            for x in range(width):
-                if gray_pixels[x, y] < threshold:
-                    x_dark[x] += 1
-
-        # Classify each x as "has text" or "gap" in this band
-        band_rows = y_end - y_start
-        gap_threshold = band_rows * 0.01  # <1% dark pixels = gap
-        in_text = False
-        regions = 0
-        gap_width = 0
-
-        for x in range(width):
-            if x_dark[x] > gap_threshold:
-                if not in_text:
-                    if gap_width >= min_gap or regions == 0:
-                        regions += 1
-                    in_text = True
-                gap_width = 0
-            else:
-                in_text = False
-                gap_width += 1
-
-        if regions >= min_columns:
-            # Found multi-column layout — header ends here
-            # Go back a bit to avoid cutting into the first column row
-            return max(0, y_start)
-
-    return 0
-
-
 def _detect_title_region(image, boundaries, threshold=200):
     """Detect a title region at the top of the page that spans multiple columns.
 
@@ -167,6 +116,97 @@ def _detect_title_region(image, boundaries, threshold=200):
         body_top_per_col[c] = body_start_y[c]
 
     return title_image, body_top_per_col
+
+
+def _find_band_dividers(pixels, width, height, threshold=200, band_height=200,
+                        drift_px=15, min_band_frac=0.50):
+    """Detect ink divider lines using horizontal band analysis.
+
+    Splits the image into horizontal bands and finds strong vertical dark lines
+    in each band independently. Then clusters peaks across bands to handle
+    headers (where dividers may not exist) and slight skew (where divider
+    x-positions drift by a few pixels).
+
+    Args:
+        pixels: Pixel access object from a grayscale PIL Image.
+        width, height: Image dimensions.
+        threshold: Grayscale value below which a pixel is considered dark.
+        band_height: Height of each horizontal band in pixels.
+        drift_px: Maximum x-drift between bands to consider the same divider.
+        min_band_frac: Minimum fraction of bands a peak must appear in.
+
+    Returns list of divider x-positions (center of each cluster).
+    """
+    n_bands = max(1, height // band_height)
+    # Collect per-band peaks: list of lists of x-positions
+    band_peaks = []
+    for b in range(n_bands):
+        y_start = b * band_height
+        y_end = min((b + 1) * band_height, height)
+        band_h = y_end - y_start
+        if band_h < 20:
+            continue
+
+        # Vertical projection for this band
+        v_profile = [0] * width
+        for x in range(width):
+            for y in range(y_start, y_end):
+                if pixels[x, y] < threshold:
+                    v_profile[x] += 1
+
+        # Find peaks: x-positions where dark count >= 80% of band height
+        peak_threshold = band_h * 0.8
+        peaks = []
+        in_peak = False
+        peak_start = 0
+        for x in range(width):
+            if v_profile[x] >= peak_threshold:
+                if not in_peak:
+                    peak_start = x
+                    in_peak = True
+            else:
+                if in_peak:
+                    peaks.append((peak_start + x) // 2)
+                    in_peak = False
+        if in_peak:
+            peaks.append((peak_start + width - 1) // 2)
+
+        band_peaks.append(peaks)
+
+    if not band_peaks:
+        return []
+
+    # Cluster peaks across bands within ±drift_px corridor
+    # Start with peaks from the first band that has any, then grow clusters
+    clusters = []  # each cluster is a list of (band_idx, x) tuples
+    for b_idx, peaks in enumerate(band_peaks):
+        for px in peaks:
+            # Try to assign to an existing cluster
+            best_cluster = None
+            best_dist = drift_px + 1
+            for ci, cluster in enumerate(clusters):
+                # Compare against the mean x of the cluster
+                mean_x = sum(x for _, x in cluster) / len(cluster)
+                dist = abs(px - mean_x)
+                if dist <= drift_px and dist < best_dist:
+                    best_dist = dist
+                    best_cluster = ci
+            if best_cluster is not None:
+                clusters[best_cluster].append((b_idx, px))
+            else:
+                clusters.append([(b_idx, px)])
+
+    # Filter: keep clusters present in >= min_band_frac of bands
+    min_bands = max(1, int(len(band_peaks) * min_band_frac))
+    divider_xs = []
+    for cluster in clusters:
+        unique_bands = len(set(b for b, _ in cluster))
+        if unique_bands >= min_bands:
+            mean_x = int(sum(x for _, x in cluster) / len(cluster))
+            divider_xs.append(mean_x)
+
+    divider_xs.sort()
+    return divider_xs
 
 
 def _find_gap_boundaries(gray_pixels, x_start, x_end, y_start, y_end,
@@ -382,8 +422,8 @@ def _split_columns(image, debug_dir=None, overlap_px=20):
     """Split a newspaper page image into individual column images.
 
     Uses a three-phase algorithm:
-    1. Detect ink divider lines via vertical projection profile
-    2. Subdivide wide segments using row-by-row gap voting
+    1. Detect ink divider lines via band-based vertical projection
+    2. Subdivide wide segments using gap coverage analysis (fallback)
     3. Merge boundaries, crop columns with overlap padding
 
     Args:
@@ -403,36 +443,13 @@ def _split_columns(image, debug_dir=None, overlap_px=20):
     width, height = gray.size
     pixels = gray.load()
 
-    body_top = 0
+    # Phase 1: detect ink divider lines via band-based analysis
+    divider_xs = _find_band_dividers(pixels, width, height)
 
-    # Phase 1: detect ink divider lines via vertical projection profile
-    v_profile = [0] * width
-    for x in range(width):
-        for y in range(body_top, height):
-            if pixels[x, y] < 200:
-                v_profile[x] += 1
-
-    body_height = height - body_top
-    divider_threshold = body_height * 0.8
-    divider_xs = []
-    in_divider = False
-    div_start = 0
-    for x in range(width):
-        if v_profile[x] >= divider_threshold:
-            if not in_divider:
-                div_start = x
-                in_divider = True
-        else:
-            if in_divider:
-                divider_xs.append((div_start + x) // 2)
-                in_divider = False
-    if in_divider:
-        divider_xs.append((div_start + width - 1) // 2)
-
-    # Phase 2: subdivide wide segments using gap voting
+    # Phase 2: subdivide wide segments using gap coverage analysis
     phase1_boundaries = [0] + divider_xs + [width]
 
-    # Compute median segment width from Phase 1
+    # Compute median segment width from Phase 1 dividers
     seg_widths = [phase1_boundaries[i + 1] - phase1_boundaries[i]
                   for i in range(len(phase1_boundaries) - 1)]
     seg_widths_sorted = sorted(seg_widths)
@@ -441,6 +458,17 @@ def _split_columns(image, debug_dir=None, overlap_px=20):
         median_width = seg_widths_sorted[mid]
     else:
         median_width = width
+
+    # If Phase 1 found no dividers, estimate column width from image width
+    # (newspaper pages at 300 DPI have ~700-750px columns)
+    if not divider_xs:
+        estimated_col_width = 730
+        # Only attempt gap fallback on wide images (likely multi-column)
+        if width > estimated_col_width * 1.5:
+            median_width = estimated_col_width
+
+    # Scan bottom 60% for gap analysis (skip header/title area)
+    gap_y_start = int(height * 0.4)
 
     all_boundaries = set(phase1_boundaries)
 
@@ -452,8 +480,8 @@ def _split_columns(image, debug_dir=None, overlap_px=20):
         # Only subdivide segments wider than 1.5x the median
         if seg_w > median_width * 1.5:
             gap_bounds = _find_gap_boundaries(
-                pixels, seg_left, seg_right, body_top, height,
-                expected_col_width=median_width)
+                pixels, seg_left, seg_right, gap_y_start, height,
+                expected_col_width=median_width, min_gap_px=15)
             all_boundaries.update(gap_bounds)
 
     # Phase 3: merge, sort, and crop
