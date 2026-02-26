@@ -103,6 +103,7 @@ class TesseractClaudeEngine(TesseractEngine):
         reflowed_sections = [_reflow_text(s) for s in sections]
         reflowed_text = "\n\n".join(s for s in reflowed_sections if s)
 
+        transcribed_path = sub_dir / "transcribed.txt"
         pre_claude_path = sub_dir / "transcribed-pre-claude.txt"
         pre_claude_path.write_text(reflowed_text + "\n", encoding="utf-8")
         print(green(f"  -> {pre_claude_path}"))
