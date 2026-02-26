@@ -47,6 +47,7 @@ def list_files(output_dir_name):
             marker = green(" [done]")
         print(f"  {i}) {f.name}{marker}")
     print("  n) Next unprocessed")
+    print("  a) All unprocessed")
     print("  q) Quit")
     print()
 
@@ -137,7 +138,7 @@ def main():
         if files is None:
             break
 
-        selection = input(green(f"Select file [1-{len(files)}, n, or q]: ")).strip()
+        selection = input(green(f"Select file [1-{len(files)}, n, a, or q]: ")).strip()
 
         if selection.lower() == "q":
             print("Bye.")
@@ -159,6 +160,24 @@ def main():
                 engine.process_file(next_file)
             except Exception as e:
                 print(red(f"Error: {e}"), file=sys.stderr)
+            continue
+
+        if selection.lower() == "a":
+            # Collect all unprocessed files
+            unprocessed = [
+                f for f in files
+                if not (OUTPUT_DIR / f.stem / engine.output_dir_name / "combined.txt").exists()
+            ]
+            if not unprocessed:
+                print(yellow("All files have been processed."))
+                continue
+            print(f"\nProcessing {len(unprocessed)} unprocessed file(s)...")
+            for f in unprocessed:
+                print(f"\n--- {f.name} ---")
+                try:
+                    engine.process_file(f)
+                except Exception as e:
+                    print(red(f"Error processing {f.name}: {e}"), file=sys.stderr)
             continue
 
         try:
